@@ -1020,6 +1020,44 @@ const Deploy = () => {
                 </a>
               </div>
 
+              {/* Companion Services Credentials */}
+              {Object.keys(companionServices).length > 0 && (
+                <div className="mx-auto max-w-md rounded-xl border border-border bg-card/80 p-5 mb-6 text-left">
+                  <p className="text-xs text-muted-foreground mb-3 uppercase tracking-wider flex items-center gap-1.5">
+                    <Server className="h-3.5 w-3.5" /> Companion Services
+                  </p>
+                  <div className="space-y-3">
+                    {Object.entries(companionServices).map(([name, svc]) => (
+                      <div key={name} className="rounded-lg border border-border bg-background/50 p-3">
+                        <div className="flex items-center gap-2 mb-2">
+                          <span className="text-xs font-mono font-semibold text-primary">🐳 {name}</span>
+                          <span className="text-xs text-muted-foreground">{(svc as CompanionService).image}</span>
+                        </div>
+                        <div className="space-y-1">
+                          {Object.entries((svc as CompanionService).inject_env).map(([key, val]) => (
+                            <div key={key} className="flex items-center gap-2">
+                              <span className="font-mono text-[10px] text-muted-foreground min-w-[120px]">{key}</span>
+                              <span className="font-mono text-[10px] text-foreground break-all">{val}</span>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-5 w-5 p-0 text-muted-foreground hover:text-foreground shrink-0"
+                                onClick={() => {
+                                  navigator.clipboard.writeText(val);
+                                  toast.success(`Copied ${key}`);
+                                }}
+                              >
+                                <Copy className="h-3 w-3" />
+                              </Button>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               {/* Countdown */}
               <div className={`mb-8 ${countdown <= 120 ? "text-warning" : "text-muted-foreground"}`}>
                 {countdown <= 120 && (
