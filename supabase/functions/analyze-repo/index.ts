@@ -257,7 +257,7 @@ ${uniqueEnvVars.length > 0 ? `\nEnvironment variables from .env.example (ONLY us
 
     // Fetch repo metadata
     const repoRes = await fetch(`https://api.github.com/repos/${owner}/${repo}`, {
-      headers: { Accept: "application/vnd.github.v3+json", "User-Agent": "Lovable-Deploy" },
+      headers: getGitHubHeaders(),
     });
     let repoMeta = {};
     if (repoRes.ok) {
