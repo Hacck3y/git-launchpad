@@ -49,7 +49,7 @@ const Settings = () => {
     try {
       const { error } = await supabase
         .from("profiles")
-        .update({ display_name: displayName, avatar_url: avatarUrl })
+        .update({ display_name: displayName })
         .eq("user_id", user.id);
       if (error) throw error;
       toast.success("Profile updated successfully");
