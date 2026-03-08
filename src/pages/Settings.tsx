@@ -29,7 +29,7 @@ const Settings = () => {
   const { user, profile, signOut } = useAuth();
   const { theme, setTheme } = useTheme();
   const [displayName, setDisplayName] = useState("");
-  const [avatarUrl, setAvatarUrl] = useState("");
+  const [saving, setSaving] = useState(false);
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
