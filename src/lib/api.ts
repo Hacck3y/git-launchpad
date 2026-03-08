@@ -3,7 +3,7 @@ interface DeployRequest {
   env_vars: Record<string, string>;
 }
 
-const BASE_URL = "http://157.245.109.239:3000";
+const BASE_URL = import.meta.env.VITE_API_BASE_URL || "https://157.245.109.239";
 
 export async function deployRepo(req: DeployRequest) {
   const res = await fetch(`${BASE_URL}/api/deploy`, {
