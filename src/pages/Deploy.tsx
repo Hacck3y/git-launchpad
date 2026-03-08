@@ -81,6 +81,7 @@ interface DeployStep {
 const INITIAL_STEPS: DeployStep[] = [
   { label: "Cloning repository...", status: "pending" },
   { label: "Detecting stack...", status: "pending" },
+  { label: "Starting companion services...", status: "pending" },
   { label: "Installing dependencies...", status: "pending" },
   { label: "Building project...", status: "pending" },
   { label: "Starting server...", status: "pending" },
