@@ -6,7 +6,7 @@ Always uses Docker. Writes .env file from user-provided env vars.
 Detects stalled/failed builds with timeouts.
 Auto-retries with AI-powered error fixing (up to 3 retries).
 Supports pnpm/yarn/npm monorepos with workspace dependencies.
-Uses --network host so containers can access host services (postgres, redis, etc.) via localhost.
+Auto-spins companion service containers (MySQL, Redis, Postgres, MongoDB) on a Docker network.
 """
 import os
 import subprocess
@@ -15,6 +15,7 @@ import tempfile
 import time
 import json
 import socket
+import secrets
 import urllib.request
 import urllib.error
 import docker
@@ -41,6 +42,60 @@ HEALTH_CHECK_TIMEOUT = 50  # 10 attempts x 5s
 
 # Max AI fix retries
 MAX_FIX_RETRIES = 3
+
+# ─── Companion Service Map ────────────────────────────────────────
+SERVICE_MAP = {
+    "mysql": {
+        "image": "mysql:8",
+        "env": {"MYSQL_ROOT_PASSWORD": "auto", "MYSQL_DATABASE": "app"},
+        "port": 3306,
+        "inject": {"DB_HOST": "{hostname}", "DB_PORT": "3306", "DB_USER": "root", "DB_PASSWORD": "{password}", "DB_NAME": "app"},
+        "health_cmd": ["mysqladmin", "ping", "-h", "localhost"],
+        "health_timeout": 30,
+    },
+    "redis": {
+        "image": "redis:alpine",
+        "port": 6379,
+        "inject": {"REDIS_URL": "redis://{hostname}:6379"},
+        "health_cmd": ["redis-cli", "ping"],
+        "health_timeout": 10,
+    },
+    "postgres": {
+        "image": "postgres:15",
+        "env": {"POSTGRES_PASSWORD": "auto", "POSTGRES_DB": "app"},
+        "port": 5432,
+        "inject": {"DATABASE_URL": "postgresql://postgres:{password}@{hostname}:5432/app"},
+        "health_cmd": ["pg_isready", "-U", "postgres"],
+        "health_timeout": 15,
+    },
+    "mongodb": {
+        "image": "mongo:6",
+        "port": 27017,
+        "inject": {"MONGODB_URI": "mongodb://{hostname}:27017/app"},
+        "health_timeout": 15,
+    },
+}
+
+# Env var patterns that indicate a service dependency
+SERVICE_DETECT_PATTERNS = {
+    "mysql": ["MYSQL", "DB_HOST", "DB_PORT", "DB_USER", "DB_PASSWORD", "DB_NAME", "MYSQL_URL"],
+    "postgres": ["POSTGRES", "DATABASE_URL", "PG_", "PGHOST", "PGDATABASE", "PGUSER", "PGPASSWORD"],
+    "redis": ["REDIS_URL", "REDIS_HOST", "REDIS_PORT"],
+    "mongodb": ["MONGODB_URI", "MONGO_URL", "MONGO_URI", "MONGODB_URL"],
+}
+
+
+def _detect_services_from_env(env_keys: List[str]) -> List[str]:
+    """Detect which services are needed based on env var keys."""
+    detected = set()
+    for key in env_keys:
+        key_upper = key.upper()
+        for service, patterns in SERVICE_DETECT_PATTERNS.items():
+            for pattern in patterns:
+                if pattern in key_upper:
+                    detected.add(service)
+                    break
+    return list(detected)
 
 
 def _allocate_port() -> int:
@@ -216,6 +271,138 @@ class Deployer:
                 except Exception:
                     pass
 
+    # ─── Companion Service Management ────────────────────────────────
+
+    def _create_network(self, deploy_id: str) -> str:
+        """Create an isolated Docker network for this deployment."""
+        network_name = f"gitpreview_{deploy_id}_net"
+        try:
+            network = self.docker.networks.create(network_name, driver="bridge")
+            self._emit_log(deploy_id, f"▶ Created network: {network_name}")
+            print(f"[DOCKER] Created network: {network_name}")
+            return network_name
+        except APIError as e:
+            # Network might already exist
+            print(f"[DOCKER] Network create error (may exist): {e}")
+            return network_name
+
+    def _cleanup_network(self, network_name: str):
+        """Remove a Docker network."""
+        try:
+            network = self.docker.networks.get(network_name)
+            network.remove()
+            print(f"[DOCKER] Removed network: {network_name}")
+        except NotFound:
+            pass
+        except Exception as e:
+            print(f"[DOCKER] Failed to remove network {network_name}: {e}")
+
+    def _start_companion_services(self, deploy_id: str, network_name: str,
+                                   needed_services: List[str]) -> Dict[str, Dict[str, Any]]:
+        """Start companion service containers on the deployment network.
+        Returns a dict of {service_name: {hostname, port, password, container_name, inject_env}}."""
+        service_info = {}
+
+        for svc_name in needed_services:
+            svc_config = SERVICE_MAP.get(svc_name)
+            if not svc_config:
+                continue
+
+            container_name = f"svc-{deploy_id}-{svc_name}"
+            hostname = svc_name  # Docker network alias
+
+            # Generate random password for services that need one
+            password = secrets.token_urlsafe(16)
+            env = {}
+            if svc_config.get("env"):
+                for key, val in svc_config["env"].items():
+                    env[key] = password if val == "auto" else val
+
+            try:
+                self._emit_log(deploy_id, f"▶ Starting {svc_name} ({svc_config['image']})...")
+
+                container = self.docker.containers.run(
+                    image=svc_config["image"],
+                    name=container_name,
+                    detach=True,
+                    network=network_name,
+                    mem_limit="256m",
+                    nano_cpus=int(0.5e9),  # 0.5 CPU
+                    environment=env,
+                    remove=False,
+                )
+
+                # Set network alias so app can reach it by service name
+                try:
+                    network = self.docker.networks.get(network_name)
+                    network.disconnect(container)
+                    network.connect(container, aliases=[svc_name])
+                except Exception:
+                    pass  # Already connected with alias during run
+
+                # Wait for service to be healthy
+                health_timeout = svc_config.get("health_timeout", 15)
+                health_cmd = svc_config.get("health_cmd")
+                ready = False
+
+                for attempt in range(health_timeout):
+                    time.sleep(1)
+                    try:
+                        container.reload()
+                        if container.status != "running":
+                            continue
+                        if health_cmd:
+                            exit_code, _ = container.exec_run(health_cmd)
+                            if exit_code == 0:
+                                ready = True
+                                break
+                        else:
+                            # No health check — just wait a bit
+                            if attempt >= 3:
+                                ready = True
+                                break
+                    except Exception:
+                        continue
+
+                if ready:
+                    self._emit_log(deploy_id, f"✓ {svc_name} is ready")
+                else:
+                    self._emit_log(deploy_id, f"⚠ {svc_name} may not be fully ready (continuing anyway)")
+
+                # Build inject env vars with actual values
+                inject_env = {}
+                for env_key, env_tpl in svc_config.get("inject", {}).items():
+                    inject_env[env_key] = env_tpl.replace("{hostname}", hostname).replace("{password}", password)
+
+                service_info[svc_name] = {
+                    "hostname": hostname,
+                    "port": svc_config["port"],
+                    "password": password if env else None,
+                    "container_name": container_name,
+                    "container_id": container.id,
+                    "inject_env": inject_env,
+                    "image": svc_config["image"],
+                }
+
+                print(f"[DOCKER] Started companion: {container_name} ({svc_config['image']})")
+
+            except Exception as e:
+                self._emit_log(deploy_id, f"✗ Failed to start {svc_name}: {str(e)[:200]}")
+                print(f"[DOCKER] Failed to start companion {svc_name}: {e}")
+
+        return service_info
+
+    def _cleanup_companion_services(self, deploy_id: str):
+        """Stop and remove all companion service containers for a deployment."""
+        for svc_name in SERVICE_MAP:
+            container_name = f"svc-{deploy_id}-{svc_name}"
+            self._cleanup_container(container_name)
+
+        network_name = f"gitpreview_{deploy_id}_net"
+        self._cleanup_network(network_name)
+
+    # ─── Deploy lifecycle ────────────────────────────────────────────
+
     def start_deploy(
         self,
         deploy_id: str,
@@ -241,6 +428,7 @@ class Deployer:
                 "ai_fix_attempts": 0,
                 "ai_fix_log": [],
                 "build_logs": [],
+                "companion_services": {},  # filled later
             }
 
         thread = threading.Thread(
@@ -437,22 +625,46 @@ class Deployer:
             return False, f"BUILD_ERROR: {str(e)[:1000]}"
 
     def _run_container(self, deploy_id: str, image_name: str, container_name: str,
-                       env_vars: Dict[str, str], app_port: int) -> tuple:
-        """Run a container using docker-py. Returns (container_id, error_log)."""
+                       env_vars: Dict[str, str], app_port: int,
+                       network_name: str = None) -> tuple:
+        """Run a container using docker-py. Returns (container_id, error_log).
+        If network_name is given, uses bridge network with port mapping instead of host network."""
         env = {**env_vars, "PORT": str(app_port), "HOST": "0.0.0.0"}
 
         try:
             self._emit_log(deploy_id, f"▶ Starting container on port {app_port}...")
-            container = self.docker.containers.run(
-                image=image_name,
-                name=container_name,
-                detach=True,
-                network_mode="host",
-                mem_limit="512m",
-                nano_cpus=int(1e9),  # 1.0 CPU
-                environment=env,
-                remove=False,
-            )
+
+            if network_name:
+                # Use bridge network with companion services
+                host_port = _allocate_port()
+                container = self.docker.containers.run(
+                    image=image_name,
+                    name=container_name,
+                    detach=True,
+                    network=network_name,
+                    ports={f"{app_port}/tcp": host_port},
+                    mem_limit="512m",
+                    nano_cpus=int(1e9),  # 1.0 CPU
+                    environment=env,
+                    remove=False,
+                )
+                # Store the host port mapping
+                with self._lock:
+                    if deploy_id in self.deployments:
+                        self.deployments[deploy_id]["host_port"] = host_port
+            else:
+                # No companion services — use host network (original behavior)
+                container = self.docker.containers.run(
+                    image=image_name,
+                    name=container_name,
+                    detach=True,
+                    network_mode="host",
+                    mem_limit="512m",
+                    nano_cpus=int(1e9),  # 1.0 CPU
+                    environment=env,
+                    remove=False,
+                )
+
             self._emit_log(deploy_id, f"✓ Container started: {container.short_id}")
 
             # Start background thread to stream container stdout/stderr
@@ -492,7 +704,8 @@ class Deployer:
         t.start()
 
     def _build_and_run(self, deploy_id: str, tmp_dir: str, env_vars: Dict[str, str],
-                        port: int, app_port: int, attempt: int) -> tuple:
+                        port: int, app_port: int, attempt: int,
+                        network_name: str = None) -> tuple:
         """Build Docker image and run container. Returns (success, error_log)."""
         container_name = f"deploy-{deploy_id}"
         image_name = f"deploy-{deploy_id}:latest"
@@ -514,19 +727,28 @@ class Deployer:
         # Run
         self._update_status(deploy_id, "starting" if attempt == 0 else "ai_retrying")
         container_id, error_log = self._run_container(
-            deploy_id, image_name, container_name, env_vars, app_port
+            deploy_id, image_name, container_name, env_vars, app_port,
+            network_name=network_name,
         )
         if not container_id:
             return False, error_log
 
+        # Determine the port to health-check
+        if network_name:
+            # With bridge network, check the mapped host port
+            with self._lock:
+                check_port = self.deployments.get(deploy_id, {}).get("host_port", app_port)
+        else:
+            check_port = app_port
+
         # Health check — verify container AND port are actually alive
-        alive, error_log = self._check_container_health(container_name, app_port=app_port)
+        alive, error_log = self._check_container_health(container_name, app_port=check_port)
         if not alive:
             self._cleanup_container(container_name)
             return False, f"CRASH_ERROR: {error_log}"
 
-        # Success! With --network host, the app binds directly to host port
-        preview_url = f"http://{HOST_IP}:{app_port}"
+        # Success!
+        preview_url = f"http://{HOST_IP}:{check_port}"
         self._update_status(
             deploy_id, "live",
             container_id=container_id,
@@ -585,6 +807,7 @@ class Deployer:
         deploy_config: Optional[Dict[str, Any]],
     ):
         tmp_dir = None
+        network_name = None
         try:
             # --- Step 1: Clone ---
             self._update_status(deploy_id, "cloning")
@@ -609,6 +832,49 @@ class Deployer:
             if deploy_config:
                 dockerfile_content = deploy_config.get("dockerfile_content")
                 app_port = deploy_config.get("port", 3000)
+
+            # --- Detect and start companion services ---
+            env_keys = list(env_vars.keys())
+            # Also check deploy_config detected_services if provided
+            detected_services = []
+            if deploy_config and deploy_config.get("detected_services"):
+                detected_services = deploy_config["detected_services"]
+            else:
+                detected_services = _detect_services_from_env(env_keys)
+
+            companion_info = {}
+            if detected_services:
+                self._emit_log(deploy_id, f"▶ Detected service dependencies: {', '.join(detected_services)}")
+                network_name = self._create_network(deploy_id)
+
+                companion_info = self._start_companion_services(deploy_id, network_name, detected_services)
+
+                # Inject companion env vars into the app's env
+                for svc_name, svc_data in companion_info.items():
+                    for env_key, env_val in svc_data.get("inject_env", {}).items():
+                        # Only inject if user hasn't manually set this var
+                        if env_key not in env_vars or not env_vars[env_key]:
+                            env_vars[env_key] = env_val
+                            self._emit_log(deploy_id, f"  → Injected {env_key}")
+
+                # Re-write .env file with injected vars
+                self._write_env_file(tmp_dir, env_vars)
+
+                # Store companion info in deployment state (sanitized for frontend)
+                with self._lock:
+                    if deploy_id in self.deployments:
+                        self.deployments[deploy_id]["companion_services"] = {
+                            name: {
+                                "service": name,
+                                "image": data["image"],
+                                "hostname": data["hostname"],
+                                "port": data["port"],
+                                "password": data.get("password"),
+                                "inject_env": data.get("inject_env", {}),
+                                "container_name": data["container_name"],
+                            }
+                            for name, data in companion_info.items()
+                        }
 
             # For pnpm monorepos, override the AI-generated Dockerfile with our proven template
             if package_manager == "pnpm" and monorepo and (not dockerfile_content or "npm install" in (dockerfile_content or "")):
@@ -655,7 +921,8 @@ class Deployer:
 
             for attempt in range(MAX_FIX_RETRIES + 1):
                 success, error_log = self._build_and_run(
-                    deploy_id, tmp_dir, env_vars, port, app_port, attempt
+                    deploy_id, tmp_dir, env_vars, port, app_port, attempt,
+                    network_name=network_name,
                 )
 
                 if success:
@@ -766,8 +1033,12 @@ class Deployer:
             if not info:
                 return False
 
+        # Kill main app container
         container_name = f"deploy-{deploy_id}"
         self._cleanup_container(container_name)
+
+        # Kill companion service containers and network
+        self._cleanup_companion_services(deploy_id)
 
         with self._lock:
             if deploy_id in self.deployments:

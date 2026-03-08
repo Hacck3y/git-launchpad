@@ -370,6 +370,27 @@ ${uniqueEnvVars.length > 0 ? `\nEnvironment variables from .env.example (ONLY us
       is_running: s.is_running,
     }));
 
+    // --- Detect companion service dependencies from env var keys ---
+    const serviceDetectPatterns: Record<string, string[]> = {
+      mysql: ["MYSQL", "DB_HOST", "DB_PORT", "DB_USER", "DB_PASSWORD", "DB_NAME", "MYSQL_URL"],
+      postgres: ["POSTGRES", "DATABASE_URL", "PG_", "PGHOST", "PGDATABASE", "PGUSER", "PGPASSWORD"],
+      redis: ["REDIS_URL", "REDIS_HOST", "REDIS_PORT"],
+      mongodb: ["MONGODB_URI", "MONGO_URL", "MONGO_URI", "MONGODB_URL"],
+    };
+
+    const detectedServices: string[] = [];
+    const envKeySet = envVarsResult.map((v: any) => v.key.toUpperCase());
+    for (const [service, patterns] of Object.entries(serviceDetectPatterns)) {
+      for (const key of envKeySet) {
+        if (patterns.some(p => key.includes(p))) {
+          if (!detectedServices.includes(service)) {
+            detectedServices.push(service);
+          }
+          break;
+        }
+      }
+    }
+
     return new Response(
       JSON.stringify({
         repo: repoMeta,
@@ -381,8 +402,10 @@ ${uniqueEnvVars.length > 0 ? `\nEnvironment variables from .env.example (ONLY us
           start_cmd: deployConfig.start_cmd,
           port: deployConfig.port,
           dockerfile_content: deployConfig.dockerfile_content,
+          detected_services: detectedServices,
         },
         detected_stack: detectedStack,
+        detected_services: detectedServices,
         files_analyzed: Object.keys(fileContents),
         env_vars: envVarsResult,
         required_env_vars: envVarsResult.map((v: any) => v.key),

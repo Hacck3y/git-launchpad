@@ -63,6 +63,16 @@ interface PlatformServiceInfo {
   is_running: boolean;
 }
 
+interface CompanionService {
+  service: string;
+  image: string;
+  hostname: string;
+  port: number;
+  password: string | null;
+  inject_env: Record<string, string>;
+  container_name: string;
+}
+
 interface DeployStep {
   label: string;
   status: "pending" | "running" | "done";
@@ -115,6 +125,8 @@ const Deploy = () => {
   const [lastStatus, setLastStatus] = useState<string>("");
   const [platformServices, setPlatformServices] = useState<PlatformServiceInfo[]>([]);
   const [showPlatformValues, setShowPlatformValues] = useState<Record<string, boolean>>({});
+  const [detectedServices, setDetectedServices] = useState<string[]>([]);
+  const [companionServices, setCompanionServices] = useState<Record<string, CompanionService>>({});
 
   const validateUrl = (url: string) => {
     const githubRegex = /^https?:\/\/github\.com\/[\w.-]+\/[\w.-]+\/?$/;
@@ -169,6 +181,13 @@ const Deploy = () => {
       // Store platform services info
       if (result.platform_services) {
         setPlatformServices(result.platform_services);
+      }
+
+      // Store detected companion services
+      if (result.detected_services && result.detected_services.length > 0) {
+        setDetectedServices(result.detected_services);
+      } else if (result.deploy_config?.detected_services) {
+        setDetectedServices(result.deploy_config.detected_services);
       }
 
       toast.success("AI analyzed your repo successfully!");
@@ -322,6 +341,11 @@ const Deploy = () => {
           const liveUrl = data.preview_url || data.url || "";
           setPreviewUrl(liveUrl);
           setDeployLogs(prev => [...prev, `✓ Live at: ${liveUrl}`]);
+
+          // Capture companion services info
+          if (data.companion_services) {
+            setCompanionServices(data.companion_services);
+          }
 
           if (data.expires_at) {
             const expiresAt = new Date(data.expires_at).getTime();
@@ -597,6 +621,28 @@ const Deploy = () => {
                     </span>
                   ))}
                 </div>
+
+                {/* Detected companion services */}
+                {detectedServices.length > 0 && (
+                  <div className="mt-3">
+                    <p className="text-xs text-muted-foreground mb-2 flex items-center gap-1.5">
+                      <Server className="h-3.5 w-3.5 text-primary" /> Auto-provisioned services
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      {detectedServices.map((svc) => (
+                        <span
+                          key={svc}
+                          className="inline-flex items-center rounded-md border border-primary/30 bg-primary/10 px-3 py-1 text-xs font-mono font-medium text-primary"
+                        >
+                          🐳 {svc}
+                        </span>
+                      ))}
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-1.5">
+                      These will be automatically started as companion containers during deploy.
+                    </p>
+                  </div>
+                )}
               </div>
 
               {/* Env vars section */}
@@ -974,6 +1020,44 @@ const Deploy = () => {
                 </a>
               </div>
 
+              {/* Companion Services Credentials */}
+              {Object.keys(companionServices).length > 0 && (
+                <div className="mx-auto max-w-md rounded-xl border border-border bg-card/80 p-5 mb-6 text-left">
+                  <p className="text-xs text-muted-foreground mb-3 uppercase tracking-wider flex items-center gap-1.5">
+                    <Server className="h-3.5 w-3.5" /> Companion Services
+                  </p>
+                  <div className="space-y-3">
+                    {Object.entries(companionServices).map(([name, svc]) => (
+                      <div key={name} className="rounded-lg border border-border bg-background/50 p-3">
+                        <div className="flex items-center gap-2 mb-2">
+                          <span className="text-xs font-mono font-semibold text-primary">🐳 {name}</span>
+                          <span className="text-xs text-muted-foreground">{(svc as CompanionService).image}</span>
+                        </div>
+                        <div className="space-y-1">
+                          {Object.entries((svc as CompanionService).inject_env).map(([key, val]) => (
+                            <div key={key} className="flex items-center gap-2">
+                              <span className="font-mono text-[10px] text-muted-foreground min-w-[120px]">{key}</span>
+                              <span className="font-mono text-[10px] text-foreground break-all">{val}</span>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-5 w-5 p-0 text-muted-foreground hover:text-foreground shrink-0"
+                                onClick={() => {
+                                  navigator.clipboard.writeText(val);
+                                  toast.success(`Copied ${key}`);
+                                }}
+                              >
+                                <Copy className="h-3 w-3" />
+                              </Button>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               {/* Countdown */}
               <div className={`mb-8 ${countdown <= 120 ? "text-warning" : "text-muted-foreground"}`}>
                 {countdown <= 120 && (
@@ -1060,6 +1144,8 @@ const Deploy = () => {
                     setDeployError(null);
                     setDeployLogs([]);
                     setPollFailCount(0);
+                    setDetectedServices([]);
+                    setCompanionServices({});
                   }}
                 >
                   <Rocket className="h-4 w-4" />
