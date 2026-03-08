@@ -1,5 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useSearchParams, Link } from "react-router-dom";
+import { useAuth } from "@/contexts/AuthContext";
+import { supabase } from "@/integrations/supabase/client";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   ArrowRight,
@@ -65,6 +67,7 @@ const languageColors: Record<string, string> = {
 const Deploy = () => {
   const [searchParams] = useSearchParams();
   const initialRepo = searchParams.get("repo") || "";
+  const { user } = useAuth();
 
   const [step, setStep] = useState(1);
   const [repoUrl, setRepoUrl] = useState(initialRepo);
@@ -146,8 +149,22 @@ const Deploy = () => {
         env_vars: envVarsObj,
         deploy_config: deployConfig || undefined,
       });
-      if (result.deploy_id || result.deployment_id || result.id) {
-        setDeployId(result.deploy_id || result.deployment_id || result.id);
+      const newDeployId = result.deploy_id || result.deployment_id || result.id;
+      if (newDeployId) {
+        setDeployId(newDeployId);
+
+        // Save deployment to database
+        if (user) {
+          await supabase.from("deployments").insert({
+            user_id: user.id,
+            deploy_id: newDeployId,
+            repo_url: repoUrl,
+            repo_name: repoInfo?.fullName || repoUrl.split("/").slice(-2).join("/"),
+            status: "deploying",
+            language: deployConfig?.language || repoInfo?.language || null,
+            framework: deployConfig?.framework || null,
+          } as any);
+        }
       } else {
         toast.error("Deploy failed: " + (result.error || "Unknown error"));
         setDeploying(false);
@@ -193,13 +210,26 @@ const Deploy = () => {
           clearInterval(poll);
           setDeploySteps((prev) => prev.map((s) => ({ ...s, status: "done" as const })));
           setDeployProgress(100);
-          setPreviewUrl(data.preview_url || data.url || "");
+          const liveUrl = data.preview_url || data.url || "";
+          setPreviewUrl(liveUrl);
 
           // Calculate countdown from expires_at
           if (data.expires_at) {
             const expiresAt = new Date(data.expires_at).getTime();
             const remaining = Math.max(0, Math.floor((expiresAt - Date.now()) / 1000));
             setCountdown(remaining);
+          }
+
+          // Update deployment in database
+          if (user) {
+            await supabase
+              .from("deployments")
+              .update({
+                status: "live",
+                preview_url: liveUrl,
+                expires_at: data.expires_at || null,
+              } as any)
+              .eq("deploy_id", deployId);
           }
 
           setTimeout(() => {

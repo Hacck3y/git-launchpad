@@ -14,6 +14,51 @@ export type Database = {
   }
   public: {
     Tables: {
+      deployments: {
+        Row: {
+          created_at: string
+          deploy_id: string
+          expires_at: string | null
+          framework: string | null
+          id: string
+          language: string | null
+          preview_url: string | null
+          repo_name: string
+          repo_url: string
+          status: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          deploy_id: string
+          expires_at?: string | null
+          framework?: string | null
+          id?: string
+          language?: string | null
+          preview_url?: string | null
+          repo_name: string
+          repo_url: string
+          status?: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          deploy_id?: string
+          expires_at?: string | null
+          framework?: string | null
+          id?: string
+          language?: string | null
+          preview_url?: string | null
+          repo_name?: string
+          repo_url?: string
+          status?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       profiles: {
         Row: {
           avatar_url: string | null
