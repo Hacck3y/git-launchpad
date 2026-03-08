@@ -647,6 +647,31 @@ const Deploy = () => {
                 )}
               </div>
 
+              {/* Confidence indicator */}
+              {deployConfig?.confidence != null && (
+                <div className={`mb-6 rounded-lg border p-3 ${
+                  (deployConfig.confidence ?? 0) >= 70
+                    ? "border-success/30 bg-success/5"
+                    : "border-warning/30 bg-warning/5"
+                }`}>
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-medium text-muted-foreground">Deploy Confidence</span>
+                    <span className={`font-mono text-sm font-bold ${
+                      (deployConfig.confidence ?? 0) >= 70 ? "text-success" : "text-warning"
+                    }`}>
+                      {deployConfig.confidence}%
+                    </span>
+                  </div>
+                  <Progress value={deployConfig.confidence ?? 0} className="h-1.5 mt-2" />
+                  {deployConfig.confidence_notes && (
+                    <p className="text-xs text-warning mt-2 flex items-start gap-1.5">
+                      <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+                      {deployConfig.confidence_notes}
+                    </p>
+                  )}
+                </div>
+              )}
+
               {/* Env vars section */}
               {(() => {
                 const platformVars = envVars.filter(v => v.platform_service);
