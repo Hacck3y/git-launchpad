@@ -40,7 +40,6 @@ const Settings = () => {
     }
     if (profile) {
       setDisplayName(profile.display_name || "");
-      setAvatarUrl(profile.avatar_url || "");
     }
   }, [user, profile, navigate]);
 
