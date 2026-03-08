@@ -241,6 +241,15 @@ const Deploy = () => {
           return prev;
         });
 
+        // Append AI fix logs if present
+        const aiFixLog: string[] = data.ai_fix_log || [];
+        if (aiFixLog.length > 0) {
+          setDeployLogs(prev => {
+            const newLogs = aiFixLog.filter(l => !prev.includes(`🤖 ${l}`)).map(l => `🤖 ${l}`);
+            return newLogs.length > 0 ? [...prev, ...newLogs] : prev;
+          });
+        }
+
         // Map API status to deploy steps
         const statusMap: Record<string, number> = {
           cloning: 0,
@@ -248,7 +257,9 @@ const Deploy = () => {
           installing: 2,
           building: 3,
           starting: 4,
-          live: 5,
+          ai_fixing: 5,
+          ai_retrying: 5,
+          live: 6,
         };
 
         const stepIndex = statusMap[status] ?? -1;
