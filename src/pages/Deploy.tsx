@@ -769,12 +769,36 @@ const Deploy = () => {
                   )}
                   Destroy Preview
                 </Button>
-                <Link to="/deploy">
-                  <Button variant="ghost" className="gap-2 text-muted-foreground hover:text-foreground">
-                    <Rocket className="h-4 w-4" />
-                    Deploy another
-                  </Button>
-                </Link>
+                <Button
+                  variant="ghost"
+                  className="gap-2 text-muted-foreground hover:text-foreground"
+                  onClick={() => {
+                    setStep(1);
+                    setRepoUrl("");
+                    setUrlError("");
+                    setRepoInfo(null);
+                    setLoadingRepo(false);
+                    setEnvVars([{ key: "", value: "" }]);
+                    setSkipEnvVars(false);
+                    setDetectedStack([]);
+                    setDeploySteps(INITIAL_STEPS);
+                    setDeployProgress(0);
+                    setPreviewUrl("");
+                    setCountdown(900);
+                    setDeployId(null);
+                    setDeploying(false);
+                    setDeployConfig(null);
+                    setAnalyzing(false);
+                    setTtlMinutes(20);
+                    setDestroying(false);
+                    setDeployError(null);
+                    setDeployLogs([]);
+                    setPollFailCount(0);
+                  }}
+                >
+                  <Rocket className="h-4 w-4" />
+                  Deploy another
+                </Button>
               </div>
             </motion.div>
           )}
