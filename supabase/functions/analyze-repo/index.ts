@@ -21,10 +21,22 @@ const ENV_FILES = [".env.example", ".env.sample", ".env.template", ".env.develop
 
 // --- GitHub helpers ---
 
+function getGitHubHeaders(): Record<string, string> {
+  const headers: Record<string, string> = {
+    Accept: "application/vnd.github.v3+json",
+    "User-Agent": "Lovable-Deploy",
+  };
+  const token = Deno.env.get("GITHUB_TOKEN");
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
+  }
+  return headers;
+}
+
 async function fetchGitHubTree(owner: string, repo: string): Promise<string[]> {
   const res = await fetch(
     `https://api.github.com/repos/${owner}/${repo}/git/trees/HEAD?recursive=1`,
-    { headers: { Accept: "application/vnd.github.v3+json", "User-Agent": "Lovable-Deploy" } }
+    { headers: getGitHubHeaders() }
   );
   if (!res.ok) throw new Error(`GitHub tree API error ${res.status}: ${await res.text()}`);
   const data = await res.json();
@@ -33,9 +45,11 @@ async function fetchGitHubTree(owner: string, repo: string): Promise<string[]> {
 
 async function fetchFileContent(owner: string, repo: string, path: string): Promise<string | null> {
   try {
+    const rawHeaders = getGitHubHeaders();
+    rawHeaders["Accept"] = "application/vnd.github.v3.raw";
     const res = await fetch(
       `https://api.github.com/repos/${owner}/${repo}/contents/${path}`,
-      { headers: { Accept: "application/vnd.github.v3.raw", "User-Agent": "Lovable-Deploy" } }
+      { headers: rawHeaders }
     );
     if (!res.ok) return null;
     const text = await res.text();
