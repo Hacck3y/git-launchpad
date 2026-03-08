@@ -315,12 +315,13 @@ const Deploy = () => {
         const statusMap: Record<string, number> = {
           cloning: 0,
           detecting: 1,
-          installing: 2,
-          building: 3,
-          starting: 4,
-          ai_fixing: 5,
-          ai_retrying: 5,
-          live: 6,
+          services: 2,
+          installing: 3,
+          building: 4,
+          starting: 5,
+          ai_fixing: 6,
+          ai_retrying: 6,
+          live: 7,
         };
 
         const stepIndex = statusMap[status] ?? -1;
