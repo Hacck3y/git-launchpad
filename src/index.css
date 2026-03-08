@@ -6,6 +6,54 @@
 
 @layer base {
   :root {
+    --background: 0 0% 100%;
+    --foreground: 222 25% 10%;
+
+    --card: 0 0% 98%;
+    --card-foreground: 222 25% 10%;
+
+    --popover: 0 0% 98%;
+    --popover-foreground: 222 25% 10%;
+
+    --primary: 175 100% 35%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 220 14% 92%;
+    --secondary-foreground: 222 20% 20%;
+
+    --muted: 220 14% 95%;
+    --muted-foreground: 215 15% 40%;
+
+    --accent: 175 100% 35%;
+    --accent-foreground: 0 0% 100%;
+
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 210 40% 98%;
+
+    --border: 220 13% 87%;
+    --input: 220 14% 92%;
+    --ring: 175 100% 35%;
+
+    --radius: 0.625rem;
+
+    --success: 142 76% 46%;
+    --warning: 38 92% 50%;
+    --cyan-glow: 175 100% 35%;
+
+    --sidebar-background: 0 0% 97%;
+    --sidebar-foreground: 222 25% 10%;
+    --sidebar-primary: 175 100% 35%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 220 14% 95%;
+    --sidebar-accent-foreground: 222 25% 10%;
+    --sidebar-border: 220 13% 87%;
+    --sidebar-ring: 175 100% 35%;
+
+    --font-mono: 'JetBrains Mono', monospace;
+    --font-sans: 'Inter', system-ui, sans-serif;
+  }
+
+  .dark {
     --background: 222 25% 6%;
     --foreground: 210 20% 90%;
 
