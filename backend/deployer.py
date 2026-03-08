@@ -879,6 +879,7 @@ class Deployer:
 
             companion_info = {}
             if detected_services:
+                self._update_status(deploy_id, "services")
                 self._emit_log(deploy_id, f"▶ Detected service dependencies: {', '.join(detected_services)}")
                 network_name = self._create_network(deploy_id)
 
