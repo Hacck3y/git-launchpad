@@ -80,6 +80,8 @@ const Deploy = () => {
   const [countdown, setCountdown] = useState(900); // 15 min
   const [deployId, setDeployId] = useState<string | null>(null);
   const [deploying, setDeploying] = useState(false);
+  const [deployConfig, setDeployConfig] = useState<DeployConfig | null>(null);
+  const [analyzing, setAnalyzing] = useState(false);
 
   const validateUrl = (url: string) => {
     const githubRegex = /^https?:\/\/github\.com\/[\w.-]+\/[\w.-]+\/?$/;
