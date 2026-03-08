@@ -216,6 +216,8 @@ You MUST respond with ONLY valid JSON (no markdown, no explanation) in this exac
   "start_cmd": "string",
   "port": number,
   "dockerfile_content": "string (a complete Dockerfile)",
+  "confidence": number (0-100),
+  "confidence_notes": "string explaining what might be missing if confidence < 70",
   "env_vars": [
     {
       "key": "VAR_NAME",
@@ -234,14 +236,28 @@ CRITICAL RULES for env_vars:
   - If it's a SECRET, API KEY, or external service credential (like OPENAI_API_KEY, STRIPE_KEY, etc.), set "value" to "" and "needs_user_input" to true.
   - If the .env.example already has a value, use that value and set "needs_user_input" to false.
 
-Rules for the Dockerfile:
-- Use multi-stage builds when appropriate
-- Always EXPOSE the correct port
+CRITICAL RULES for the Dockerfile:
+- Always use multi-stage builds for Node.js applications (builder stage + slim production stage)
+- For Python apps:
+  - Detect if it's Flask (port 5000), FastAPI (port 8000), or Django (port 8000)
+  - Use gunicorn or uvicorn as the production server
+- For Node.js apps:
+  - Check package.json scripts for 'start', 'dev', 'serve' — use whichever exists, prefer 'start'
+  - For apps needing build steps (React/Vue/Next.js/Vite): always add RUN npm run build
+- Always add: ENV PORT=<detected_port> and make the app bind to 0.0.0.0:$PORT
+- Never hardcode ports in CMD — always reference the PORT env variable
+- Add HEALTHCHECK CMD: curl -f http://localhost:$PORT/ || exit 1 (install curl in the image if needed)
 - Use slim/alpine base images when possible
 - Set proper WORKDIR
 - Copy dependency files first for better layer caching
 - The CMD should match start_cmd
-- Include all necessary system dependencies`;
+- Include all necessary system dependencies
+
+CONFIDENCE SCORE:
+- Set "confidence" to a number 0-100 for how likely this Dockerfile will work on first try
+- If confidence < 70, set "confidence_notes" to explain what's missing (e.g. "App requires MySQL but no DATABASE_URL provided", "Custom build scripts detected that may need manual configuration")
+- If confidence >= 70, set "confidence_notes" to ""`;
+
 
     const userPrompt = `Analyze this repository and provide deployment configuration.
 
@@ -403,6 +419,8 @@ ${uniqueEnvVars.length > 0 ? `\nEnvironment variables from .env.example (ONLY us
           port: deployConfig.port,
           dockerfile_content: deployConfig.dockerfile_content,
           detected_services: detectedServices,
+          confidence: deployConfig.confidence || null,
+          confidence_notes: deployConfig.confidence_notes || "",
         },
         detected_stack: detectedStack,
         detected_services: detectedServices,
