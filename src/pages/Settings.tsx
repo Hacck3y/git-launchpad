@@ -30,7 +30,6 @@ const Settings = () => {
   const { theme, setTheme } = useTheme();
   const [displayName, setDisplayName] = useState("");
   const [saving, setSaving] = useState(false);
-  const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
