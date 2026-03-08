@@ -55,6 +55,7 @@ const INITIAL_STEPS: DeployStep[] = [
   { label: "Installing dependencies...", status: "pending" },
   { label: "Building project...", status: "pending" },
   { label: "Starting server...", status: "pending" },
+  { label: "AI auto-fix (if needed)...", status: "pending" },
 ];
 
 const languageColors: Record<string, string> = {
@@ -240,6 +241,15 @@ const Deploy = () => {
           return prev;
         });
 
+        // Append AI fix logs if present
+        const aiFixLog: string[] = data.ai_fix_log || [];
+        if (aiFixLog.length > 0) {
+          setDeployLogs(prev => {
+            const newLogs = aiFixLog.filter(l => !prev.includes(`🤖 ${l}`)).map(l => `🤖 ${l}`);
+            return newLogs.length > 0 ? [...prev, ...newLogs] : prev;
+          });
+        }
+
         // Map API status to deploy steps
         const statusMap: Record<string, number> = {
           cloning: 0,
@@ -247,7 +257,9 @@ const Deploy = () => {
           installing: 2,
           building: 3,
           starting: 4,
-          live: 5,
+          ai_fixing: 5,
+          ai_retrying: 5,
+          live: 6,
         };
 
         const stepIndex = statusMap[status] ?? -1;
@@ -693,7 +705,7 @@ const Deploy = () => {
                     <p
                       key={i}
                       className={`font-mono text-xs leading-relaxed ${
-                        log.startsWith("✗") ? "text-destructive" : log.startsWith("⚠") ? "text-warning" : log.startsWith("✓") ? "text-success" : "text-muted-foreground"
+                        log.startsWith("✗") ? "text-destructive" : log.startsWith("⚠") ? "text-warning" : log.startsWith("✓") ? "text-success" : log.startsWith("🤖") ? "text-primary" : "text-muted-foreground"
                       }`}
                     >
                       {log}

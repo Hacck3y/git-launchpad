@@ -2,3 +2,6 @@ project_id = "hpmzhxtezgqtslomftwp"
 
 [functions.analyze-repo]
 verify_jwt = false
+
+[functions.fix-deploy-error]
+verify_jwt = false
