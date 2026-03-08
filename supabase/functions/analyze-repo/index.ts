@@ -1,4 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -85,6 +86,62 @@ function extractEnvVarsFromContent(content: string): ParsedEnvVar[] {
   return vars;
 }
 
+// --- Platform services ---
+
+interface PlatformService {
+  service_type: string;
+  display_name: string;
+  connection_url: string | null;
+  host: string | null;
+  port: number | null;
+  username: string | null;
+  password: string | null;
+  is_running: boolean;
+  env_key_patterns: string[];
+}
+
+async function fetchPlatformServices(): Promise<PlatformService[]> {
+  try {
+    const supabaseUrl = Deno.env.get("SUPABASE_URL");
+    const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+    if (!supabaseUrl || !supabaseKey) return [];
+
+    const supabase = createClient(supabaseUrl, supabaseKey);
+    const { data, error } = await supabase
+      .from("platform_services")
+      .select("*");
+    
+    if (error || !data) return [];
+    return data as PlatformService[];
+  } catch {
+    return [];
+  }
+}
+
+function matchEnvVarToService(envKey: string, services: PlatformService[]): PlatformService | null {
+  for (const svc of services) {
+    if (svc.env_key_patterns.some(pattern => envKey.toUpperCase() === pattern.toUpperCase())) {
+      return svc;
+    }
+  }
+  // Fuzzy match: check if key contains service type name
+  const keyUpper = envKey.toUpperCase();
+  for (const svc of services) {
+    const typeUpper = svc.service_type.toUpperCase();
+    if (keyUpper.includes(typeUpper) && (keyUpper.includes("URL") || keyUpper.includes("HOST") || keyUpper.includes("CONNECTION"))) {
+      return svc;
+    }
+  }
+  return null;
+}
+
+function buildConnectionUrl(svc: PlatformService): string {
+  if (svc.connection_url) return svc.connection_url;
+  const proto = svc.service_type === "redis" ? "redis" : svc.service_type === "mongodb" ? "mongodb" : svc.service_type;
+  const auth = svc.username ? `${svc.username}${svc.password ? `:${svc.password}` : ""}@` : "";
+  return `${proto}://${auth}${svc.host || "host.docker.internal"}:${svc.port}/${svc.service_type}`;
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
@@ -98,7 +155,12 @@ serve(async (req) => {
     if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY is not configured");
 
     const { owner, repo } = parseRepoUrl(repo_url);
-    const allFiles = await fetchGitHubTree(owner, repo);
+
+    // Fetch platform services and GitHub data in parallel
+    const [allFiles, platformServices] = await Promise.all([
+      fetchGitHubTree(owner, repo),
+      fetchPlatformServices(),
+    ]);
 
     // Fetch config files
     const configFilesToFetch = allFiles.filter((f) => {
@@ -121,7 +183,7 @@ serve(async (req) => {
       })
     );
 
-    // Extract env vars with their default values from .env.example files ONLY
+    // Extract env vars from .env.example files ONLY
     const parsedEnvVars: ParsedEnvVar[] = [];
     for (const [path, content] of Object.entries(fileContents)) {
       const basename = path.split("/").pop() || "";
@@ -129,12 +191,11 @@ serve(async (req) => {
         parsedEnvVars.push(...extractEnvVarsFromContent(content));
       }
     }
-    // Deduplicate by key
     const uniqueEnvVars = parsedEnvVars.filter(
       (v, i, arr) => arr.findIndex((x) => x.key === v.key) === i
     );
 
-    // Build AI prompt for deploy config
+    // Build AI prompt
     const treeStr = allFiles.slice(0, 200).join("\n");
     const configStr = Object.entries(fileContents)
       .map(([path, content]) => `--- ${path} ---\n${content}`)
@@ -237,8 +298,7 @@ ${uniqueEnvVars.length > 0 ? `\nEnvironment variables from .env.example (ONLY us
       throw new Error("AI returned invalid deployment config");
     }
 
-    // Use AI-generated env_vars (which are strictly from .env.example)
-    // Fallback: if AI didn't return env_vars, build from parsed file
+    // Use AI-generated env_vars
     let envVarsResult = deployConfig.env_vars || [];
     if (!Array.isArray(envVarsResult) || envVarsResult.length === 0) {
       envVarsResult = uniqueEnvVars.map(v => ({
@@ -249,10 +309,41 @@ ${uniqueEnvVars.length > 0 ? `\nEnvironment variables from .env.example (ONLY us
       }));
     }
 
-    // Safety: filter out any vars the AI hallucinated that aren't in .env.example
+    // Safety: filter out hallucinated vars
     if (uniqueEnvVars.length > 0) {
       const allowedKeys = new Set(uniqueEnvVars.map(v => v.key));
       envVarsResult = envVarsResult.filter((v: any) => allowedKeys.has(v.key));
+    }
+
+    // --- Match env vars to platform services ---
+    const platformMatches: Record<string, { service: PlatformService; connection_url: string }> = {};
+    
+    for (const envVar of envVarsResult) {
+      const matchedService = matchEnvVarToService(envVar.key, platformServices);
+      if (matchedService) {
+        const connUrl = buildConnectionUrl(matchedService);
+        platformMatches[envVar.key] = {
+          service: matchedService,
+          connection_url: connUrl,
+        };
+        
+        // Auto-fill if service is running
+        if (matchedService.is_running) {
+          envVar.value = connUrl;
+          envVar.needs_user_input = false;
+          envVar.platform_provided = true;
+          envVar.platform_service = matchedService.service_type;
+          envVar.platform_display_name = matchedService.display_name;
+          envVar.platform_running = true;
+        } else {
+          // Service not running - flag it
+          envVar.platform_provided = false;
+          envVar.platform_service = matchedService.service_type;
+          envVar.platform_display_name = matchedService.display_name;
+          envVar.platform_running = false;
+          envVar.needs_user_input = true;
+        }
+      }
     }
 
     // Fetch repo metadata
@@ -272,6 +363,13 @@ ${uniqueEnvVars.length > 0 ? `\nEnvironment variables from .env.example (ONLY us
 
     const detectedStack = [deployConfig.language, deployConfig.framework].filter(Boolean);
 
+    // Build platform services summary for frontend
+    const platformServicesSummary = platformServices.map(s => ({
+      service_type: s.service_type,
+      display_name: s.display_name,
+      is_running: s.is_running,
+    }));
+
     return new Response(
       JSON.stringify({
         repo: repoMeta,
@@ -288,6 +386,7 @@ ${uniqueEnvVars.length > 0 ? `\nEnvironment variables from .env.example (ONLY us
         files_analyzed: Object.keys(fileContents),
         env_vars: envVarsResult,
         required_env_vars: envVarsResult.map((v: any) => v.key),
+        platform_services: platformServicesSummary,
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
