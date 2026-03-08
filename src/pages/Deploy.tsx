@@ -183,6 +183,13 @@ const Deploy = () => {
         setPlatformServices(result.platform_services);
       }
 
+      // Store detected companion services
+      if (result.detected_services && result.detected_services.length > 0) {
+        setDetectedServices(result.detected_services);
+      } else if (result.deploy_config?.detected_services) {
+        setDetectedServices(result.deploy_config.detected_services);
+      }
+
       toast.success("AI analyzed your repo successfully!");
     } catch (err: any) {
       setUrlError(err.message || "Failed to analyze repository");
