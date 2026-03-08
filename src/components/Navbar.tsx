@@ -40,12 +40,9 @@ const Navbar = () => {
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="ghost" size="sm" className="gap-2 px-2">
-                  <Avatar className="h-7 w-7">
-                    <AvatarImage src={profile?.avatar_url || ""} />
-                    <AvatarFallback className="text-xs bg-primary/10 text-primary">
-                      {(profile?.display_name || profile?.email || "U").charAt(0).toUpperCase()}
-                    </AvatarFallback>
-                  </Avatar>
+                  <div className="flex h-7 w-7 items-center justify-center rounded-full bg-primary/10 text-xs font-medium text-primary">
+                    {(profile?.display_name || profile?.email || "U").charAt(0).toUpperCase()}
+                  </div>
                   <span className="text-sm max-w-[120px] truncate hidden sm:inline">
                     {profile?.display_name || profile?.email || "User"}
                   </span>
