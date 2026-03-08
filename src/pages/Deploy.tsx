@@ -88,6 +88,9 @@ const Deploy = () => {
   const [analyzing, setAnalyzing] = useState(false);
   const [ttlMinutes, setTtlMinutes] = useState(20);
   const [destroying, setDestroying] = useState(false);
+  const [deployError, setDeployError] = useState<string | null>(null);
+  const [deployLogs, setDeployLogs] = useState<string[]>([]);
+  const [pollFailCount, setPollFailCount] = useState(0);
 
   const validateUrl = (url: string) => {
     const githubRegex = /^https?:\/\/github\.com\/[\w.-]+\/[\w.-]+\/?$/;
@@ -138,6 +141,9 @@ const Deploy = () => {
     setDeploying(true);
     setDeploySteps(INITIAL_STEPS);
     setDeployProgress(0);
+    setDeployError(null);
+    setDeployLogs([]);
+    setPollFailCount(0);
     setStep(3);
 
     try {
@@ -147,6 +153,7 @@ const Deploy = () => {
           if (ev.key.trim()) envVarsObj[ev.key.trim()] = ev.value;
         });
       }
+      setDeployLogs(prev => [...prev, `→ Sending deploy request to server...`]);
       const result = await deployRepo({
         repo_url: repoUrl,
         env_vars: envVarsObj,
@@ -156,6 +163,7 @@ const Deploy = () => {
       const newDeployId = result.deploy_id || result.deployment_id || result.id;
       if (newDeployId) {
         setDeployId(newDeployId);
+        setDeployLogs(prev => [...prev, `→ Deploy ID: ${newDeployId}`, `→ Polling for status updates...`]);
 
         // Save deployment to database
         if (user) {
@@ -170,11 +178,17 @@ const Deploy = () => {
           } as any);
         }
       } else {
-        toast.error("Deploy failed: " + (result.error || "Unknown error"));
+        const errMsg = result.error || "No deploy ID returned from server";
+        setDeployError(errMsg);
+        setDeployLogs(prev => [...prev, `✗ Error: ${errMsg}`]);
+        toast.error("Deploy failed: " + errMsg);
         setDeploying(false);
       }
     } catch (err: any) {
-      toast.error("Deploy request failed: " + err.message);
+      const errMsg = err.message || "Could not reach deploy server";
+      setDeployError(errMsg);
+      setDeployLogs(prev => [...prev, `✗ Request failed: ${errMsg}`]);
+      toast.error("Deploy request failed: " + errMsg);
       setDeploying(false);
     }
   };
@@ -187,6 +201,15 @@ const Deploy = () => {
       try {
         const data = await getDeployment(deployId);
         const status = data.status;
+        setPollFailCount(0);
+
+        // Add log for status changes
+        setDeployLogs(prev => {
+          const lastLog = prev[prev.length - 1];
+          const newLog = `→ Status: ${status}`;
+          if (lastLog !== newLog) return [...prev, newLog];
+          return prev;
+        });
 
         // Map API status to deploy steps
         const statusMap: Record<string, number> = {
@@ -216,15 +239,14 @@ const Deploy = () => {
           setDeployProgress(100);
           const liveUrl = data.preview_url || data.url || "";
           setPreviewUrl(liveUrl);
+          setDeployLogs(prev => [...prev, `✓ Live at: ${liveUrl}`]);
 
-          // Calculate countdown from expires_at
           if (data.expires_at) {
             const expiresAt = new Date(data.expires_at).getTime();
             const remaining = Math.max(0, Math.floor((expiresAt - Date.now()) / 1000));
             setCountdown(remaining);
           }
 
-          // Update deployment in database
           if (user) {
             await supabase
               .from("deployments")
@@ -244,12 +266,24 @@ const Deploy = () => {
 
         if (status === "error" || status === "failed") {
           clearInterval(poll);
-          toast.error("Deployment failed: " + (data.error || "Unknown error"));
+          const errMsg = data.error || data.message || data.detail || "Deployment failed on server";
+          setDeployError(errMsg);
+          setDeployLogs(prev => [...prev, `✗ Failed: ${errMsg}`]);
+          toast.error("Deployment failed: " + errMsg);
           setDeploying(false);
         }
-      } catch {
-        
-        // Ignore transient fetch errors, keep polling
+      } catch (err: any) {
+        setPollFailCount(prev => {
+          const newCount = prev + 1;
+          setDeployLogs(logs => [...logs, `⚠ Poll error (${newCount}/10): ${err.message || "Network error"}`]);
+          if (newCount >= 10) {
+            clearInterval(poll);
+            setDeployError("Lost connection to deploy server after 10 retries");
+            setDeployLogs(logs => [...logs, `✗ Gave up after 10 failed poll attempts`]);
+            setDeploying(false);
+          }
+          return newCount;
+        });
       }
     }, 3000);
 
@@ -539,10 +573,12 @@ const Deploy = () => {
               exit={{ opacity: 0, x: -30 }}
               transition={{ duration: 0.3 }}
             >
-              <h2 className="text-2xl font-bold mb-2">Deploying...</h2>
+              <h2 className="text-2xl font-bold mb-2">
+                {deployError ? "Deploy Failed" : "Deploying..."}
+              </h2>
               <p className="text-muted-foreground mb-6 font-mono text-sm">{repoInfo?.fullName || "your-repo"}</p>
 
-              <Progress value={deployProgress} className="h-2 mb-8" />
+              <Progress value={deployProgress} className={`h-2 mb-8 ${deployError ? "[&>div]:bg-destructive" : ""}`} />
 
               <div className="rounded-xl border border-border bg-card/80 p-5 font-mono text-sm space-y-3">
                 {deploySteps.map((s, i) => (
@@ -570,7 +606,7 @@ const Deploy = () => {
                   </motion.div>
                 ))}
 
-                {deployProgress >= 100 && (
+                {deployProgress >= 100 && !deployError && (
                   <motion.div
                     initial={{ opacity: 0 }}
                     animate={{ opacity: 1 }}
@@ -582,9 +618,59 @@ const Deploy = () => {
                 )}
               </div>
 
-              <div className="mt-4 flex items-center gap-2 text-xs text-muted-foreground">
-                <span className="animate-blink">█</span> Hang tight, this usually takes under 60 seconds...
-              </div>
+              {/* Error banner */}
+              {deployError && (
+                <motion.div
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className="mt-4 rounded-lg border border-destructive/50 bg-destructive/10 p-4"
+                >
+                  <div className="flex items-start gap-2">
+                    <AlertTriangle className="h-5 w-5 text-destructive shrink-0 mt-0.5" />
+                    <div>
+                      <p className="font-semibold text-destructive text-sm">Deployment Error</p>
+                      <p className="text-sm text-destructive/80 mt-1 font-mono">{deployError}</p>
+                    </div>
+                  </div>
+                  <div className="mt-3 flex gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => {
+                        setDeployError(null);
+                        setDeployId(null);
+                        setStep(2);
+                      }}
+                      className="gap-1.5 border-destructive/30 text-destructive hover:bg-destructive/10"
+                    >
+                      <ArrowLeft className="h-3.5 w-3.5" /> Go Back & Retry
+                    </Button>
+                  </div>
+                </motion.div>
+              )}
+
+              {/* Live log output */}
+              {deployLogs.length > 0 && (
+                <div className="mt-4 rounded-lg border border-border bg-background/80 p-3 max-h-40 overflow-y-auto">
+                  <p className="text-xs text-muted-foreground mb-2 uppercase tracking-wider">Deploy Log</p>
+                  {deployLogs.map((log, i) => (
+                    <p
+                      key={i}
+                      className={`font-mono text-xs leading-relaxed ${
+                        log.startsWith("✗") ? "text-destructive" : log.startsWith("⚠") ? "text-warning" : log.startsWith("✓") ? "text-success" : "text-muted-foreground"
+                      }`}
+                    >
+                      {log}
+                    </p>
+                  ))}
+                </div>
+              )}
+
+              {!deployError && (
+                <div className="mt-4 flex items-center gap-2 text-xs text-muted-foreground">
+                  <span className="animate-blink">█</span> Hang tight, this usually takes under 60 seconds...
+                </div>
+              )}
             </motion.div>
           )}
 
