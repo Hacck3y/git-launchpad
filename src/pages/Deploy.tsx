@@ -705,7 +705,7 @@ const Deploy = () => {
                     <p
                       key={i}
                       className={`font-mono text-xs leading-relaxed ${
-                        log.startsWith("✗") ? "text-destructive" : log.startsWith("⚠") ? "text-warning" : log.startsWith("✓") ? "text-success" : "text-muted-foreground"
+                        log.startsWith("✗") ? "text-destructive" : log.startsWith("⚠") ? "text-warning" : log.startsWith("✓") ? "text-success" : log.startsWith("🤖") ? "text-primary" : "text-muted-foreground"
                       }`}
                     >
                       {log}
