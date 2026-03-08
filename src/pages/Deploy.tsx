@@ -400,6 +400,18 @@ const Deploy = () => {
     updated[index][field] = val;
     setEnvVars(updated);
   };
+  const togglePlatformUse = (index: number) => {
+    const updated = [...envVars];
+    updated[index].use_platform = !updated[index].use_platform;
+    setEnvVars(updated);
+  };
+  const toggleShowPlatformValue = (key: string) => {
+    setShowPlatformValues(prev => ({ ...prev, [key]: !prev[key] }));
+  };
+  const maskValue = (val: string) => {
+    if (val.length <= 8) return "••••••••";
+    return val.slice(0, 4) + "••••••••" + val.slice(-4);
+  };
 
   const copyLink = () => {
     navigator.clipboard.writeText(previewUrl);
