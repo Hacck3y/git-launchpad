@@ -578,9 +578,11 @@ const Deploy = () => {
                 const userInputVars = envVars.filter(v => v.needs_user_input && !v.platform_service);
                 const autoFilledVars = envVars.filter(v => !v.needs_user_input && v.key && !v.platform_service);
                 
-                // Services needed but not running
-                const neededNotRunning = platformServices.filter(s => 
-                  !s.is_running && envVars.some(v => v.platform_service === s.service_type)
+                // All services not currently running (show install option)
+                const notRunning = platformServices.filter(s => !s.is_running);
+                // Services needed by this project but not running
+                const neededNotRunning = notRunning.filter(s => 
+                  envVars.some(v => v.platform_service === s.service_type)
                 );
                 
                 return (
