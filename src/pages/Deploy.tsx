@@ -151,6 +151,7 @@ const Deploy = () => {
         repo_url: repoUrl,
         env_vars: envVarsObj,
         deploy_config: deployConfig || undefined,
+        ttl_minutes: ttlMinutes,
       });
       const newDeployId = result.deploy_id || result.deployment_id || result.id;
       if (newDeployId) {
