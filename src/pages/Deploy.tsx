@@ -205,6 +205,7 @@ const Deploy = () => {
           setDeploying(false);
         }
       } catch {
+        setStep(2);
         // Ignore transient fetch errors, keep polling
       }
     }, 3000);
