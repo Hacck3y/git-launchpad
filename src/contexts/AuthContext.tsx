@@ -1,7 +1,6 @@
 import { createContext, useContext, useEffect, useState, ReactNode } from "react";
 import { Session, User } from "@supabase/supabase-js";
 import { supabase } from "@/integrations/supabase/client";
-import { lovable } from "@/integrations/lovable";
 
 interface AuthContextType {
   session: Session | null;
@@ -21,12 +20,16 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [loading, setLoading] = useState(true);
 
   const fetchProfile = async (userId: string) => {
-    const { data } = await supabase
-      .from("profiles")
-      .select("display_name, avatar_url, email")
-      .eq("user_id", userId)
-      .single();
-    setProfile(data);
+    try {
+      const { data } = await supabase
+        .from("profiles")
+        .select("display_name, avatar_url, email")
+        .eq("user_id", userId)
+        .single();
+      setProfile(data);
+    } catch {
+      // Profile may not exist yet
+    }
   };
 
   useEffect(() => {
@@ -56,9 +59,14 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   }, []);
 
   const signInWithGoogle = async () => {
-    await lovable.auth.signInWithOAuth("google", {
-      redirect_uri: window.location.origin,
-    });
+    try {
+      const { lovable } = await import("@/integrations/lovable");
+      await lovable.auth.signInWithOAuth("google", {
+        redirect_uri: window.location.origin,
+      });
+    } catch (err) {
+      console.error("Google sign-in failed:", err);
+    }
   };
 
   const signOut = async () => {
