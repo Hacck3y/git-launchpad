@@ -573,10 +573,12 @@ const Deploy = () => {
               exit={{ opacity: 0, x: -30 }}
               transition={{ duration: 0.3 }}
             >
-              <h2 className="text-2xl font-bold mb-2">Deploying...</h2>
+              <h2 className="text-2xl font-bold mb-2">
+                {deployError ? "Deploy Failed" : "Deploying..."}
+              </h2>
               <p className="text-muted-foreground mb-6 font-mono text-sm">{repoInfo?.fullName || "your-repo"}</p>
 
-              <Progress value={deployProgress} className="h-2 mb-8" />
+              <Progress value={deployProgress} className={`h-2 mb-8 ${deployError ? "[&>div]:bg-destructive" : ""}`} />
 
               <div className="rounded-xl border border-border bg-card/80 p-5 font-mono text-sm space-y-3">
                 {deploySteps.map((s, i) => (
@@ -604,7 +606,7 @@ const Deploy = () => {
                   </motion.div>
                 ))}
 
-                {deployProgress >= 100 && (
+                {deployProgress >= 100 && !deployError && (
                   <motion.div
                     initial={{ opacity: 0 }}
                     animate={{ opacity: 1 }}
@@ -616,9 +618,59 @@ const Deploy = () => {
                 )}
               </div>
 
-              <div className="mt-4 flex items-center gap-2 text-xs text-muted-foreground">
-                <span className="animate-blink">█</span> Hang tight, this usually takes under 60 seconds...
-              </div>
+              {/* Error banner */}
+              {deployError && (
+                <motion.div
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className="mt-4 rounded-lg border border-destructive/50 bg-destructive/10 p-4"
+                >
+                  <div className="flex items-start gap-2">
+                    <AlertTriangle className="h-5 w-5 text-destructive shrink-0 mt-0.5" />
+                    <div>
+                      <p className="font-semibold text-destructive text-sm">Deployment Error</p>
+                      <p className="text-sm text-destructive/80 mt-1 font-mono">{deployError}</p>
+                    </div>
+                  </div>
+                  <div className="mt-3 flex gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => {
+                        setDeployError(null);
+                        setDeployId(null);
+                        setStep(2);
+                      }}
+                      className="gap-1.5 border-destructive/30 text-destructive hover:bg-destructive/10"
+                    >
+                      <ArrowLeft className="h-3.5 w-3.5" /> Go Back & Retry
+                    </Button>
+                  </div>
+                </motion.div>
+              )}
+
+              {/* Live log output */}
+              {deployLogs.length > 0 && (
+                <div className="mt-4 rounded-lg border border-border bg-background/80 p-3 max-h-40 overflow-y-auto">
+                  <p className="text-xs text-muted-foreground mb-2 uppercase tracking-wider">Deploy Log</p>
+                  {deployLogs.map((log, i) => (
+                    <p
+                      key={i}
+                      className={`font-mono text-xs leading-relaxed ${
+                        log.startsWith("✗") ? "text-destructive" : log.startsWith("⚠") ? "text-warning" : log.startsWith("✓") ? "text-success" : "text-muted-foreground"
+                      }`}
+                    >
+                      {log}
+                    </p>
+                  ))}
+                </div>
+              )}
+
+              {!deployError && (
+                <div className="mt-4 flex items-center gap-2 text-xs text-muted-foreground">
+                  <span className="animate-blink">█</span> Hang tight, this usually takes under 60 seconds...
+                </div>
+              )}
             </motion.div>
           )}
 
