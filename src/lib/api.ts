@@ -35,6 +35,15 @@ export async function analyzeRepo(repoUrl: string): Promise<{
     value: string;
     needs_user_input: boolean;
     description: string;
+    platform_provided?: boolean;
+    platform_service?: string;
+    platform_display_name?: string;
+    platform_running?: boolean;
+  }>;
+  platform_services?: Array<{
+    service_type: string;
+    display_name: string;
+    is_running: boolean;
   }>;
 }> {
   const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
