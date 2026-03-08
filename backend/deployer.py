@@ -181,9 +181,40 @@ class Deployer:
     def __init__(self):
         self.deployments: Dict[str, Dict[str, Any]] = {}
         self._lock = threading.Lock()
+        self._log_subscribers: Dict[str, List[Any]] = {}  # deploy_id -> list of queues
         # Initialize docker-py client from local socket
         self.docker = docker.from_env()
         print(f"[DOCKER] Connected to Docker daemon: {self.docker.version().get('Version', 'unknown')}")
+
+    def subscribe_logs(self, deploy_id: str):
+        """Subscribe to real-time logs for a deployment. Returns a queue."""
+        import queue
+        q = queue.Queue()
+        with self._lock:
+            self._log_subscribers.setdefault(deploy_id, []).append(q)
+            # Send existing build_logs as catch-up
+            info = self.deployments.get(deploy_id, {})
+            for line in info.get("build_logs", []):
+                q.put(line)
+        return q
+
+    def unsubscribe_logs(self, deploy_id: str, q):
+        """Remove a subscriber queue."""
+        with self._lock:
+            subs = self._log_subscribers.get(deploy_id, [])
+            if q in subs:
+                subs.remove(q)
+
+    def _emit_log(self, deploy_id: str, line: str):
+        """Send a log line to all subscribers and store it."""
+        with self._lock:
+            if deploy_id in self.deployments:
+                self.deployments[deploy_id].setdefault("build_logs", []).append(line)
+            for q in self._log_subscribers.get(deploy_id, []):
+                try:
+                    q.put_nowait(line)
+                except Exception:
+                    pass
 
     def start_deploy(
         self,
@@ -209,6 +240,7 @@ class Deployer:
                 "deploy_config": deploy_config,
                 "ai_fix_attempts": 0,
                 "ai_fix_log": [],
+                "build_logs": [],
             }
 
         thread = threading.Thread(
@@ -361,25 +393,31 @@ class Deployer:
             print(f"[DOCKER] Failed to remove image {image_name}: {e}")
 
     def _build_image(self, deploy_id: str, tmp_dir: str, image_name: str) -> tuple:
-        """Build a Docker image using docker-py. Returns (success, error_log)."""
+        """Build a Docker image using docker-py with real-time log streaming. Returns (success, error_log)."""
         try:
-            print(f"[DOCKER] Building image {image_name} from {tmp_dir}")
-            image, build_logs = self.docker.images.build(
+            self._emit_log(deploy_id, f"▶ Building image {image_name}...")
+            # Use low-level API for streaming build output
+            resp = self.docker.api.build(
                 path=tmp_dir,
                 tag=image_name,
-                rm=True,       # Remove intermediate containers
-                forcerm=True,  # Force removal even on failure
+                rm=True,
+                forcerm=True,
                 timeout=BUILD_TIMEOUT,
+                decode=True,  # Auto-decode JSON chunks
             )
-            # Stream build logs for debugging
-            for chunk in build_logs:
+            for chunk in resp:
                 if "stream" in chunk:
-                    line = chunk["stream"].strip()
-                    if line:
+                    line = chunk["stream"].rstrip("\n")
+                    if line.strip():
+                        self._emit_log(deploy_id, line)
                         print(f"[BUILD] {line}")
                 elif "error" in chunk:
-                    return False, f"BUILD_ERROR: {chunk['error']}"
-            print(f"[DOCKER] Image built successfully: {image.id[:12]}")
+                    error_msg = chunk["error"].strip()
+                    self._emit_log(deploy_id, f"✗ {error_msg}")
+                    return False, f"BUILD_ERROR: {error_msg}"
+
+            self._emit_log(deploy_id, "✓ Image built successfully")
+            print(f"[DOCKER] Image built successfully: {image_name}")
             return True, ""
         except BuildError as e:
             error_lines = []
@@ -389,10 +427,13 @@ class Deployer:
                 elif "stream" in chunk:
                     error_lines.append(chunk["stream"])
             error_log = "".join(error_lines)[-2000:]
+            self._emit_log(deploy_id, f"✗ Build failed")
             return False, f"BUILD_ERROR: {error_log}"
         except APIError as e:
+            self._emit_log(deploy_id, f"✗ Docker API error: {str(e)[:200]}")
             return False, f"BUILD_ERROR: Docker API error: {str(e)[:1000]}"
         except Exception as e:
+            self._emit_log(deploy_id, f"✗ Build error: {str(e)[:200]}")
             return False, f"BUILD_ERROR: {str(e)[:1000]}"
 
     def _run_container(self, deploy_id: str, image_name: str, container_name: str,
@@ -401,7 +442,7 @@ class Deployer:
         env = {**env_vars, "PORT": str(app_port), "HOST": "0.0.0.0"}
 
         try:
-            print(f"[DOCKER] Starting container {container_name} (port {app_port})")
+            self._emit_log(deploy_id, f"▶ Starting container on port {app_port}...")
             container = self.docker.containers.run(
                 image=image_name,
                 name=container_name,
@@ -410,16 +451,45 @@ class Deployer:
                 mem_limit="512m",
                 nano_cpus=int(1e9),  # 1.0 CPU
                 environment=env,
-                remove=False,  # We manage removal ourselves
+                remove=False,
             )
-            print(f"[DOCKER] Container started: {container.id[:12]}")
+            self._emit_log(deploy_id, f"✓ Container started: {container.short_id}")
+
+            # Start background thread to stream container stdout/stderr
+            self._start_runtime_log_stream(deploy_id, container_name)
+
             return container.id, ""
         except ContainerError as e:
+            self._emit_log(deploy_id, f"✗ Container error: {str(e)[:200]}")
             return None, f"RUN_ERROR: Container exited with error: {str(e)[:1000]}"
         except APIError as e:
+            self._emit_log(deploy_id, f"✗ Docker API error: {str(e)[:200]}")
             return None, f"RUN_ERROR: Docker API error: {str(e)[:1000]}"
         except Exception as e:
+            self._emit_log(deploy_id, f"✗ Run error: {str(e)[:200]}")
             return None, f"RUN_ERROR: {str(e)[:1000]}"
+
+    def _start_runtime_log_stream(self, deploy_id: str, container_name: str):
+        """Stream runtime logs from a running container in a background thread."""
+        def _stream():
+            try:
+                container = self.docker.containers.get(container_name)
+                for line in container.logs(stream=True, follow=True, timestamps=False):
+                    text = line.decode("utf-8", errors="replace").rstrip("\n")
+                    if text.strip():
+                        self._emit_log(deploy_id, f"  {text}")
+                    # Stop if deployment is no longer live
+                    with self._lock:
+                        info = self.deployments.get(deploy_id, {})
+                        if info.get("status") in ("killed", "error", "expired"):
+                            break
+            except NotFound:
+                pass
+            except Exception as e:
+                print(f"[LOG STREAM] Error for {deploy_id}: {e}")
+
+        t = threading.Thread(target=_stream, daemon=True)
+        t.start()
 
     def _build_and_run(self, deploy_id: str, tmp_dir: str, env_vars: Dict[str, str],
                         port: int, app_port: int, attempt: int) -> tuple:

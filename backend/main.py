@@ -1,8 +1,10 @@
 """
 main.py — FastAPI server handling deploy requests from the frontend.
+Includes WebSocket endpoint for real-time log streaming.
 """
 import uuid
-from fastapi import FastAPI, HTTPException
+import asyncio
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, Dict
@@ -69,6 +71,56 @@ async def kill_deploy(deploy_id: str):
     if not success:
         raise HTTPException(status_code=404, detail="Deployment not found")
     return {"status": "killed", "deploy_id": deploy_id}
+
+
+@app.websocket("/ws/logs/{deploy_id}")
+async def websocket_logs(websocket: WebSocket, deploy_id: str):
+    """Stream real-time build + runtime logs via WebSocket."""
+    await websocket.accept()
+
+    # Check deployment exists
+    info = deployer.get_status(deploy_id)
+    if not info:
+        await websocket.send_json({"type": "error", "message": "Deployment not found"})
+        await websocket.close()
+        return
+
+    # Subscribe to log stream
+    log_queue = deployer.subscribe_logs(deploy_id)
+
+    try:
+        while True:
+            # Non-blocking check for new log lines
+            try:
+                # Use asyncio to poll the queue without blocking the event loop
+                line = await asyncio.get_event_loop().run_in_executor(
+                    None, lambda: log_queue.get(timeout=1.0)
+                )
+                await websocket.send_json({"type": "log", "line": line})
+            except Exception:
+                # Queue.get timeout — check if deployment is done
+                status = deployer.get_status(deploy_id)
+                if not status:
+                    await websocket.send_json({"type": "end", "reason": "deployment_removed"})
+                    break
+                if status.get("status") in ("live", "error", "killed", "expired"):
+                    # Drain remaining logs
+                    while not log_queue.empty():
+                        try:
+                            line = log_queue.get_nowait()
+                            await websocket.send_json({"type": "log", "line": line})
+                        except Exception:
+                            break
+                    await websocket.send_json({
+                        "type": "end",
+                        "reason": status.get("status"),
+                        "preview_url": status.get("preview_url"),
+                    })
+                    break
+    except WebSocketDisconnect:
+        pass
+    finally:
+        deployer.unsubscribe_logs(deploy_id, log_queue)
 
 
 if __name__ == "__main__":

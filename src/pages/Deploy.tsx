@@ -32,7 +32,7 @@ import { Progress } from "@/components/ui/progress";
 import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
 import Navbar from "@/components/Navbar";
-import { deployRepo, getDeployment, killDeployment, analyzeRepo, type DeployConfig } from "@/lib/api";
+import { deployRepo, getDeployment, killDeployment, analyzeRepo, connectLogStream, type DeployConfig } from "@/lib/api";
 
 // Types
 interface RepoInfo {
@@ -370,6 +370,33 @@ const Deploy = () => {
     }, 3000);
 
     return () => clearInterval(poll);
+  }, [deployId, step]);
+
+  // WebSocket real-time log streaming
+  useEffect(() => {
+    if (!deployId || step !== 3) return;
+
+    const logStream = connectLogStream(
+      deployId,
+      (line) => {
+        setDeployLogs(prev => {
+          // Avoid duplicates
+          if (prev[prev.length - 1] === `📦 ${line}`) return prev;
+          return [...prev, `📦 ${line}`];
+        });
+      },
+      (reason, previewUrl) => {
+        if (reason === "live" && previewUrl) {
+          setDeployLogs(prev => [...prev, `✓ Stream ended: deployment is live`]);
+        }
+      },
+      (err) => {
+        console.warn("[WS] Log stream error:", err);
+        // WebSocket is optional — polling handles the main flow
+      },
+    );
+
+    return () => logStream.close();
   }, [deployId, step]);
 
   // Countdown timer for live step
@@ -890,13 +917,13 @@ const Deploy = () => {
 
               {/* Live log output */}
               {deployLogs.length > 0 && (
-                <div className="mt-4 rounded-lg border border-border bg-background/80 p-3 max-h-40 overflow-y-auto">
+                <div className="mt-4 rounded-lg border border-border bg-background/80 p-3 max-h-64 overflow-y-auto" ref={(el) => { if (el) el.scrollTop = el.scrollHeight; }}>
                   <p className="text-xs text-muted-foreground mb-2 uppercase tracking-wider">Deploy Log</p>
                   {deployLogs.map((log, i) => (
                     <p
                       key={i}
-                      className={`font-mono text-xs leading-relaxed ${
-                        log.startsWith("✗") ? "text-destructive" : log.startsWith("⚠") ? "text-warning" : log.startsWith("✓") ? "text-success" : log.startsWith("🤖") ? "text-primary" : "text-muted-foreground"
+                      className={`font-mono text-[11px] leading-relaxed ${
+                        log.startsWith("✗") ? "text-destructive" : log.startsWith("⚠") ? "text-warning" : log.startsWith("✓") ? "text-success" : log.startsWith("🤖") ? "text-primary" : log.startsWith("📦") ? "text-muted-foreground/80" : "text-muted-foreground"
                       }`}
                     >
                       {log}
