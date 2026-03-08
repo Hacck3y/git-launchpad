@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState, ReactNode } from "react";
+import { createContext, useContext, useEffect, useState, ReactNode, useCallback } from "react";
 import { Session, User } from "@supabase/supabase-js";
 import { supabase } from "@/integrations/supabase/client";
 
@@ -7,6 +7,9 @@ interface AuthContextType {
   user: User | null;
   profile: { display_name: string | null; avatar_url: string | null; email: string | null } | null;
   loading: boolean;
+  needsOnboarding: boolean;
+  completeOnboarding: () => void;
+  refreshProfile: () => Promise<void>;
   signInWithGoogle: () => Promise<void>;
   signOut: () => Promise<void>;
 }
@@ -18,8 +21,9 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<AuthContextType["profile"]>(null);
   const [loading, setLoading] = useState(true);
+  const [needsOnboarding, setNeedsOnboarding] = useState(false);
 
-  const fetchProfile = async (userId: string) => {
+  const fetchProfile = useCallback(async (userId: string) => {
     try {
       const { data } = await supabase
         .from("profiles")
@@ -27,10 +31,23 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         .eq("user_id", userId)
         .single();
       setProfile(data);
+      // If display_name is empty or the default from Google metadata, show onboarding
+      if (data && (!data.display_name || data.display_name === "")) {
+        setNeedsOnboarding(true);
+      }
     } catch {
       // Profile may not exist yet
     }
-  };
+  }, []);
+
+  const refreshProfile = useCallback(async () => {
+    if (user) await fetchProfile(user.id);
+  }, [user, fetchProfile]);
+
+  const completeOnboarding = useCallback(() => {
+    setNeedsOnboarding(false);
+    if (user) fetchProfile(user.id);
+  }, [user, fetchProfile]);
 
   useEffect(() => {
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
@@ -41,6 +58,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
           setTimeout(() => fetchProfile(session.user.id), 0);
         } else {
           setProfile(null);
+          setNeedsOnboarding(false);
         }
         setLoading(false);
       }
@@ -56,7 +74,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     });
 
     return () => subscription.unsubscribe();
-  }, []);
+  }, [fetchProfile]);
 
   const signInWithGoogle = async () => {
     try {
@@ -74,10 +92,11 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     setSession(null);
     setUser(null);
     setProfile(null);
+    setNeedsOnboarding(false);
   };
 
   return (
-    <AuthContext.Provider value={{ session, user, profile, loading, signInWithGoogle, signOut }}>
+    <AuthContext.Provider value={{ session, user, profile, loading, needsOnboarding, completeOnboarding, refreshProfile, signInWithGoogle, signOut }}>
       {children}
     </AuthContext.Provider>
   );
@@ -88,6 +107,9 @@ const defaultAuthContext: AuthContextType = {
   user: null,
   profile: null,
   loading: false,
+  needsOnboarding: false,
+  completeOnboarding: () => {},
+  refreshProfile: async () => {},
   signInWithGoogle: async () => {},
   signOut: async () => {},
 };
