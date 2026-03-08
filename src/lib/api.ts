@@ -95,3 +95,67 @@ export async function killDeployment(deployId: string) {
   }
   return res.json();
 }
+
+// ─── WebSocket log streaming ─────────────────────────────────────
+
+export interface LogMessage {
+  type: "log" | "end" | "error";
+  line?: string;
+  reason?: string;
+  message?: string;
+  preview_url?: string;
+}
+
+export function connectLogStream(
+  deployId: string,
+  onLog: (line: string) => void,
+  onEnd: (reason: string, previewUrl?: string) => void,
+  onError: (err: string) => void,
+): { close: () => void } {
+  const url = `${WS_BASE_URL}/ws/logs/${deployId}`;
+  let ws: WebSocket | null = null;
+  let closed = false;
+
+  try {
+    ws = new WebSocket(url);
+  } catch (e) {
+    onError(`Failed to connect WebSocket: ${e}`);
+    return { close: () => {} };
+  }
+
+  ws.onmessage = (event) => {
+    try {
+      const msg: LogMessage = JSON.parse(event.data);
+      if (msg.type === "log" && msg.line) {
+        onLog(msg.line);
+      } else if (msg.type === "end") {
+        onEnd(msg.reason || "unknown", msg.preview_url);
+      } else if (msg.type === "error") {
+        onError(msg.message || "Unknown error");
+      }
+    } catch {
+      // ignore parse errors
+    }
+  };
+
+  ws.onerror = () => {
+    if (!closed) {
+      onError("WebSocket connection error");
+    }
+  };
+
+  ws.onclose = () => {
+    if (!closed) {
+      // Silent close is fine — deployment may have ended
+    }
+  };
+
+  return {
+    close: () => {
+      closed = true;
+      if (ws && ws.readyState <= WebSocket.OPEN) {
+        ws.close();
+      }
+    },
+  };
+}
