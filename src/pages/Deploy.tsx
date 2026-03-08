@@ -146,6 +146,7 @@ const Deploy = () => {
       toast.error("Deploy request failed: " + err.message);
       setDeploying(false);
     }
+    setStep(2);
   };
 
   // Poll deployment status
