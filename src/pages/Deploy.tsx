@@ -574,10 +574,127 @@ const Deploy = () => {
 
               {/* Env vars section */}
               {(() => {
-                const userInputVars = envVars.filter(v => v.needs_user_input);
-                const autoFilledVars = envVars.filter(v => !v.needs_user_input && v.key);
+                const platformVars = envVars.filter(v => v.platform_service);
+                const userInputVars = envVars.filter(v => v.needs_user_input && !v.platform_service);
+                const autoFilledVars = envVars.filter(v => !v.needs_user_input && v.key && !v.platform_service);
+                
+                // Services needed but not running
+                const neededNotRunning = platformServices.filter(s => 
+                  !s.is_running && envVars.some(v => v.platform_service === s.service_type)
+                );
+                
                 return (
                   <>
+                    {/* Platform-provided services */}
+                    {platformVars.length > 0 && (
+                      <div className="mb-4">
+                        <p className="text-sm font-medium mb-2 flex items-center gap-2 text-primary">
+                          <Server className="h-4 w-4" /> Platform Services ({platformVars.length})
+                        </p>
+                        <p className="text-xs text-muted-foreground mb-3">
+                          These credentials are provided by your server. Toggle off to enter custom values.
+                        </p>
+                        <div className="space-y-3">
+                          {platformVars.map((envVar) => {
+                            const originalIdx = envVars.findIndex(v => v.key === envVar.key);
+                            const isUsingPlatform = envVar.use_platform && envVar.platform_running;
+                            const isVisible = showPlatformValues[envVar.key];
+                            
+                            return (
+                              <div key={envVar.key} className={`rounded-lg border p-3 transition-all ${
+                                isUsingPlatform 
+                                  ? "border-primary/30 bg-primary/5" 
+                                  : envVar.platform_running 
+                                    ? "border-border bg-card/50"
+                                    : "border-destructive/30 bg-destructive/5"
+                              }`}>
+                                <div className="flex items-center justify-between mb-2">
+                                  <div className="flex items-center gap-2">
+                                    <Shield className="h-3.5 w-3.5 text-primary" />
+                                    <span className="font-mono text-xs font-semibold text-foreground">{envVar.key}</span>
+                                    <span className="text-xs rounded-full px-2 py-0.5 bg-primary/10 text-primary font-medium">
+                                      {envVar.platform_display_name}
+                                    </span>
+                                    {envVar.platform_running ? (
+                                      <span className="text-xs rounded-full px-2 py-0.5 bg-emerald-500/10 text-emerald-400">● Running</span>
+                                    ) : (
+                                      <span className="text-xs rounded-full px-2 py-0.5 bg-destructive/10 text-destructive">● Not installed</span>
+                                    )}
+                                  </div>
+                                  {envVar.platform_running && (
+                                    <div className="flex items-center gap-2">
+                                      <span className="text-xs text-muted-foreground">Auto</span>
+                                      <Switch 
+                                        checked={envVar.use_platform || false}
+                                        onCheckedChange={() => togglePlatformUse(originalIdx)}
+                                      />
+                                    </div>
+                                  )}
+                                </div>
+                                
+                                {isUsingPlatform ? (
+                                  <div className="flex items-center gap-2">
+                                    <div className="flex-1 font-mono text-xs h-9 flex items-center px-3 rounded-md bg-card/50 border border-border text-muted-foreground">
+                                      {isVisible ? envVar.value : maskValue(envVar.value)}
+                                    </div>
+                                    <Button 
+                                      variant="ghost" 
+                                      size="sm" 
+                                      onClick={() => toggleShowPlatformValue(envVar.key)}
+                                      className="h-8 w-8 p-0 text-muted-foreground hover:text-foreground"
+                                    >
+                                      {isVisible ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                                    </Button>
+                                  </div>
+                                ) : envVar.platform_running ? (
+                                  <Input
+                                    value={envVar.value}
+                                    onChange={(e) => updateEnvVar(originalIdx, "value", e.target.value)}
+                                    placeholder="Enter custom value..."
+                                    type="password"
+                                    className="font-mono text-xs h-9 bg-card border-border"
+                                  />
+                                ) : (
+                                  <div className="flex items-center gap-2">
+                                    <Input
+                                      value={envVar.value}
+                                      onChange={(e) => updateEnvVar(originalIdx, "value", e.target.value)}
+                                      placeholder={`Enter ${envVar.platform_display_name} connection URL...`}
+                                      type="password"
+                                      className="flex-1 font-mono text-xs h-9 bg-card border-border"
+                                    />
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+                    
+                    {/* Install missing services */}
+                    {neededNotRunning.length > 0 && (
+                      <div className="mb-4 rounded-lg border border-border bg-card/30 p-3">
+                        <p className="text-xs text-muted-foreground mb-2">Need these services on your server?</p>
+                        <div className="flex flex-wrap gap-2">
+                          {neededNotRunning.map(svc => (
+                            <Button
+                              key={svc.service_type}
+                              variant="outline"
+                              size="sm"
+                              className="gap-1.5 text-xs border-primary/30 hover:border-primary hover:bg-primary/5"
+                              onClick={() => {
+                                toast.info(`To install ${svc.display_name}, run the install command on your VPS and update the service config in Settings.`);
+                              }}
+                            >
+                              <Download className="h-3 w-3" />
+                              Install {svc.display_name}
+                            </Button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
                     {/* User-required API keys */}
                     {userInputVars.length > 0 && (
                       <div className="mb-4">
@@ -612,7 +729,7 @@ const Deploy = () => {
                       </div>
                     )}
 
-                    {/* Auto-filled vars (collapsible) */}
+                    {/* Auto-filled vars */}
                     {autoFilledVars.length > 0 && (
                       <div className="mb-4">
                         <div className="flex items-center justify-between mb-2">
