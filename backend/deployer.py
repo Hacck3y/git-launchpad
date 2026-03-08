@@ -1,5 +1,6 @@
 """
 deployer.py — Controls how user repos are deployed inside Docker containers.
+Uses docker-py SDK for all container operations (build, run, health check, cleanup).
 Accepts AI-generated deploy_config with custom Dockerfile and commands.
 Always uses Docker. Writes .env file from user-provided env vars.
 Detects stalled/failed builds with timeouts.
@@ -13,7 +14,11 @@ import threading
 import tempfile
 import time
 import json
+import socket
 import urllib.request
+import urllib.error
+import docker
+from docker.errors import BuildError, APIError, ContainerError, ImageNotFound, NotFound
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any, List
 
@@ -32,8 +37,7 @@ _next_port = PORT_START
 # Timeouts (seconds)
 CLONE_TIMEOUT = 120
 BUILD_TIMEOUT = 900  # 15 min for complex monorepos
-RUN_TIMEOUT = 30
-HEALTH_CHECK_TIMEOUT = 30
+HEALTH_CHECK_TIMEOUT = 50  # 10 attempts x 5s
 
 # Max AI fix retries
 MAX_FIX_RETRIES = 3
@@ -123,10 +127,8 @@ def _detect_package_manager(repo_dir: str) -> str:
 
 def _is_monorepo(repo_dir: str) -> bool:
     """Check if the project is a monorepo with workspaces."""
-    # Check pnpm-workspace.yaml
     if os.path.exists(os.path.join(repo_dir, "pnpm-workspace.yaml")):
         return True
-    # Check package.json workspaces field
     pkg_path = os.path.join(repo_dir, "package.json")
     if os.path.exists(pkg_path):
         try:
@@ -179,6 +181,9 @@ class Deployer:
     def __init__(self):
         self.deployments: Dict[str, Dict[str, Any]] = {}
         self._lock = threading.Lock()
+        # Initialize docker-py client from local socket
+        self.docker = docker.from_env()
+        print(f"[DOCKER] Connected to Docker daemon: {self.docker.version().get('Version', 'unknown')}")
 
     def start_deploy(
         self,
@@ -261,9 +266,10 @@ class Deployer:
                 pass
         return {}
 
+    # ─── Health checks ───────────────────────────────────────────────
+
     def _check_port_open(self, port: int, timeout: float = 2.0) -> bool:
         """Check if a port is actually accepting TCP connections."""
-        import socket
         try:
             with socket.create_connection(("127.0.0.1", port), timeout=timeout):
                 return True
@@ -277,73 +283,143 @@ class Deployer:
             with urllib.request.urlopen(req, timeout=timeout):
                 return True
         except urllib.error.HTTPError:
-            # 404, 500, etc. — server IS responding
-            return True
+            return True  # 404, 500 etc. — server IS responding
         except Exception:
             return False
+
+    def _get_container_logs(self, container_name: str, tail: int = 80) -> str:
+        """Get recent container logs via docker-py."""
+        try:
+            container = self.docker.containers.get(container_name)
+            logs = container.logs(tail=tail, timestamps=False)
+            return logs.decode("utf-8", errors="replace")[-2000:]
+        except Exception as e:
+            return f"Failed to fetch logs: {e}"
 
     def _check_container_health(self, container_name: str, app_port: int = None) -> tuple:
         """Verify container is running AND port is actually accepting connections."""
         for attempt in range(10):  # up to 50s total
             time.sleep(5)
             try:
-                # Step 1: Is container process still alive?
-                result = subprocess.run(
-                    ["docker", "inspect", "-f", "{{.State.Running}}", container_name],
-                    capture_output=True, timeout=10,
-                )
-                state = result.stdout.decode().strip()
+                container = self.docker.containers.get(container_name)
+                container.reload()  # refresh state from daemon
+                state = container.status  # "running", "exited", "created", etc.
 
-                if state == "false":
-                    logs = subprocess.run(
-                        ["docker", "logs", "--tail", "50", container_name],
-                        capture_output=True, timeout=10,
-                    )
-                    error_log = logs.stderr.decode() or logs.stdout.decode()
-                    return False, error_log[:1500]
+                if state == "exited" or state == "dead":
+                    error_log = self._get_container_logs(container_name, tail=50)
+                    exit_code = container.attrs.get("State", {}).get("ExitCode", "?")
+                    return False, f"Container exited with code {exit_code}:\n{error_log}"
 
-                if state != "true":
+                if state != "running":
+                    print(f"[HEALTH] Container state: {state} (attempt {attempt+1})")
                     continue
 
-                # Step 2: Is the port accepting TCP connections?
+                # Container is running — check port
                 if app_port and self._check_port_open(app_port):
-                    # Step 3: Does HTTP respond? (optional bonus — TCP open is enough)
                     self._check_http_health(app_port)
                     return True, ""
 
-                # Container running but port not open yet — keep waiting
                 if app_port:
                     print(f"[HEALTH] Container running but port {app_port} not open yet (attempt {attempt+1})")
                     continue
                 else:
-                    # No port to check, just trust container state
                     return True, ""
 
+            except NotFound:
+                return False, "Container not found — may have been removed"
             except Exception as e:
                 print(f"[HEALTH] Check error: {e}")
                 continue
 
-        # Timed out — container may be running but port never opened
+        # Timed out
         if app_port:
-            logs = subprocess.run(
-                ["docker", "logs", "--tail", "80", container_name],
-                capture_output=True, timeout=10,
-            )
-            error_log = logs.stderr.decode() or logs.stdout.decode()
-            return False, f"PORT_NOT_OPEN: Container is running but port {app_port} never started accepting connections.\n{error_log[:1500]}"
+            error_log = self._get_container_logs(container_name, tail=80)
+            return False, f"PORT_NOT_OPEN: Container is running but port {app_port} never started accepting connections.\n{error_log}"
         return False, "Container health check timed out"
 
+    # ─── Container lifecycle ─────────────────────────────────────────
+
     def _cleanup_container(self, container_name: str):
+        """Force remove a container by name."""
         try:
-            subprocess.run(["docker", "rm", "-f", container_name], capture_output=True, timeout=15)
-        except Exception:
-            pass
+            container = self.docker.containers.get(container_name)
+            container.remove(force=True)
+            print(f"[DOCKER] Removed container: {container_name}")
+        except NotFound:
+            pass  # Already gone
+        except Exception as e:
+            print(f"[DOCKER] Failed to remove container {container_name}: {e}")
 
     def _cleanup_image(self, image_name: str):
+        """Force remove an image by name."""
         try:
-            subprocess.run(["docker", "rmi", "-f", image_name], capture_output=True, timeout=15)
-        except Exception:
+            self.docker.images.remove(image_name, force=True)
+            print(f"[DOCKER] Removed image: {image_name}")
+        except ImageNotFound:
             pass
+        except Exception as e:
+            print(f"[DOCKER] Failed to remove image {image_name}: {e}")
+
+    def _build_image(self, deploy_id: str, tmp_dir: str, image_name: str) -> tuple:
+        """Build a Docker image using docker-py. Returns (success, error_log)."""
+        try:
+            print(f"[DOCKER] Building image {image_name} from {tmp_dir}")
+            image, build_logs = self.docker.images.build(
+                path=tmp_dir,
+                tag=image_name,
+                rm=True,       # Remove intermediate containers
+                forcerm=True,  # Force removal even on failure
+                timeout=BUILD_TIMEOUT,
+            )
+            # Stream build logs for debugging
+            for chunk in build_logs:
+                if "stream" in chunk:
+                    line = chunk["stream"].strip()
+                    if line:
+                        print(f"[BUILD] {line}")
+                elif "error" in chunk:
+                    return False, f"BUILD_ERROR: {chunk['error']}"
+            print(f"[DOCKER] Image built successfully: {image.id[:12]}")
+            return True, ""
+        except BuildError as e:
+            error_lines = []
+            for chunk in e.build_log:
+                if "error" in chunk:
+                    error_lines.append(chunk["error"])
+                elif "stream" in chunk:
+                    error_lines.append(chunk["stream"])
+            error_log = "".join(error_lines)[-2000:]
+            return False, f"BUILD_ERROR: {error_log}"
+        except APIError as e:
+            return False, f"BUILD_ERROR: Docker API error: {str(e)[:1000]}"
+        except Exception as e:
+            return False, f"BUILD_ERROR: {str(e)[:1000]}"
+
+    def _run_container(self, deploy_id: str, image_name: str, container_name: str,
+                       env_vars: Dict[str, str], app_port: int) -> tuple:
+        """Run a container using docker-py. Returns (container_id, error_log)."""
+        env = {**env_vars, "PORT": str(app_port), "HOST": "0.0.0.0"}
+
+        try:
+            print(f"[DOCKER] Starting container {container_name} (port {app_port})")
+            container = self.docker.containers.run(
+                image=image_name,
+                name=container_name,
+                detach=True,
+                network_mode="host",
+                mem_limit="512m",
+                nano_cpus=int(1e9),  # 1.0 CPU
+                environment=env,
+                remove=False,  # We manage removal ourselves
+            )
+            print(f"[DOCKER] Container started: {container.id[:12]}")
+            return container.id, ""
+        except ContainerError as e:
+            return None, f"RUN_ERROR: Container exited with error: {str(e)[:1000]}"
+        except APIError as e:
+            return None, f"RUN_ERROR: Docker API error: {str(e)[:1000]}"
+        except Exception as e:
+            return None, f"RUN_ERROR: {str(e)[:1000]}"
 
     def _build_and_run(self, deploy_id: str, tmp_dir: str, env_vars: Dict[str, str],
                         port: int, app_port: int, attempt: int) -> tuple:
@@ -358,47 +434,20 @@ class Deployer:
 
         # Build
         self._update_status(deploy_id, "installing" if attempt == 0 else "ai_fixing")
-        build_result = subprocess.run(
-            ["docker", "build", "-t", image_name, tmp_dir],
-            capture_output=True,
-            timeout=BUILD_TIMEOUT,
-        )
-
-        if build_result.returncode != 0:
-            error_output = build_result.stderr.decode()[-2000:]
-            return False, f"BUILD_ERROR: {error_output}"
+        success, error_log = self._build_image(deploy_id, tmp_dir, image_name)
+        if not success:
+            return False, error_log
 
         self._update_status(deploy_id, "building" if attempt == 0 else "ai_fixing")
         time.sleep(1)
 
-        # Run with --network host so containers can access host services (postgres, redis, mysql)
-        # via localhost:<port>
+        # Run
         self._update_status(deploy_id, "starting" if attempt == 0 else "ai_retrying")
-        env_flags = []
-        for k, v in env_vars.items():
-            env_flags.extend(["-e", f"{k}={v}"])
-
-        run_result = subprocess.run(
-            [
-                "docker", "run", "-d",
-                "--name", container_name,
-                "--network", "host",
-                "--memory", "512m",
-                "--cpus", "1.0",
-                *env_flags,
-                "-e", f"PORT={app_port}",
-                "-e", f"HOST=0.0.0.0",
-                image_name,
-            ],
-            capture_output=True,
-            timeout=RUN_TIMEOUT,
+        container_id, error_log = self._run_container(
+            deploy_id, image_name, container_name, env_vars, app_port
         )
-
-        if run_result.returncode != 0:
-            error_output = run_result.stderr.decode()[-1000:]
-            return False, f"RUN_ERROR: {error_output}"
-
-        container_id = run_result.stdout.decode().strip()
+        if not container_id:
+            return False, error_log
 
         # Health check — verify container AND port are actually alive
         alive, error_log = self._check_container_health(container_name, app_port=app_port)
