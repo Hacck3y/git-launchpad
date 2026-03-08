@@ -397,6 +397,7 @@ const Deploy = () => {
     );
 
     return () => logStream.close();
+  }, [deployId, step]);
 
   // Countdown timer for live step
   useEffect(() => {
