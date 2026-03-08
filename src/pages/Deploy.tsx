@@ -210,13 +210,26 @@ const Deploy = () => {
           clearInterval(poll);
           setDeploySteps((prev) => prev.map((s) => ({ ...s, status: "done" as const })));
           setDeployProgress(100);
-          setPreviewUrl(data.preview_url || data.url || "");
+          const liveUrl = data.preview_url || data.url || "";
+          setPreviewUrl(liveUrl);
 
           // Calculate countdown from expires_at
           if (data.expires_at) {
             const expiresAt = new Date(data.expires_at).getTime();
             const remaining = Math.max(0, Math.floor((expiresAt - Date.now()) / 1000));
             setCountdown(remaining);
+          }
+
+          // Update deployment in database
+          if (user) {
+            await supabase
+              .from("deployments")
+              .update({
+                status: "live",
+                preview_url: liveUrl,
+                expires_at: data.expires_at || null,
+              } as any)
+              .eq("deploy_id", deployId);
           }
 
           setTimeout(() => {
