@@ -6,6 +6,7 @@ export interface DeployConfig {
   start_cmd: string;
   port: number;
   dockerfile_content: string;
+  detected_services?: string[];
 }
 
 interface DeployRequest {
