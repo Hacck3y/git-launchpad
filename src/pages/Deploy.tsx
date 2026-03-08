@@ -55,6 +55,7 @@ const INITIAL_STEPS: DeployStep[] = [
   { label: "Installing dependencies...", status: "pending" },
   { label: "Building project...", status: "pending" },
   { label: "Starting server...", status: "pending" },
+  { label: "AI auto-fix (if needed)...", status: "pending" },
 ];
 
 const languageColors: Record<string, string> = {
