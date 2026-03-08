@@ -400,8 +400,8 @@ class Deployer:
 
         container_id = run_result.stdout.decode().strip()
 
-        # Health check
-        alive, error_log = self._check_container_health(container_name)
+        # Health check — verify container AND port are actually alive
+        alive, error_log = self._check_container_health(container_name, app_port=app_port)
         if not alive:
             self._cleanup_container(container_name)
             return False, f"CRASH_ERROR: {error_log}"
