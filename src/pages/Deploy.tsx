@@ -125,6 +125,8 @@ const Deploy = () => {
   const [lastStatus, setLastStatus] = useState<string>("");
   const [platformServices, setPlatformServices] = useState<PlatformServiceInfo[]>([]);
   const [showPlatformValues, setShowPlatformValues] = useState<Record<string, boolean>>({});
+  const [detectedServices, setDetectedServices] = useState<string[]>([]);
+  const [companionServices, setCompanionServices] = useState<Record<string, CompanionService>>({});
 
   const validateUrl = (url: string) => {
     const githubRegex = /^https?:\/\/github\.com\/[\w.-]+\/[\w.-]+\/?$/;
