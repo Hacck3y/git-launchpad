@@ -42,6 +42,7 @@ export async function analyzeRepo(repoUrl: string): Promise<{
     platform_display_name?: string;
     platform_running?: boolean;
   }>;
+  detected_services?: string[];
   platform_services?: Array<{
     service_type: string;
     display_name: string;
