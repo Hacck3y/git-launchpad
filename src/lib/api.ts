@@ -30,6 +30,12 @@ export async function analyzeRepo(repoUrl: string): Promise<{
   detected_stack: string[];
   files_analyzed: string[];
   required_env_vars: string[];
+  env_vars: Array<{
+    key: string;
+    value: string;
+    needs_user_input: boolean;
+    description: string;
+  }>;
 }> {
   const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
   const res = await fetch(`${supabaseUrl}/functions/v1/analyze-repo`, {
