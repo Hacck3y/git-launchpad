@@ -45,6 +45,17 @@ interface EnvVar {
   needs_user_input?: boolean;
   description?: string;
   auto_filled?: boolean;
+  platform_provided?: boolean;
+  platform_service?: string;
+  platform_display_name?: string;
+  platform_running?: boolean;
+  use_platform?: boolean; // toggle: true = use platform cred, false = manual
+}
+
+interface PlatformServiceInfo {
+  service_type: string;
+  display_name: string;
+  is_running: boolean;
 }
 
 interface DeployStep {
