@@ -19,6 +19,8 @@ const CONFIG_FILES = [
 
 const ENV_FILES = [".env.example", ".env.sample", ".env.template", ".env.development", ".env.local.example"];
 
+// --- GitHub helpers ---
+
 async function fetchGitHubTree(owner: string, repo: string): Promise<string[]> {
   const res = await fetch(
     `https://api.github.com/repos/${owner}/${repo}/git/trees/HEAD?recursive=1`,
@@ -47,13 +49,24 @@ function parseRepoUrl(url: string): { owner: string; repo: string } {
   return { owner: match[1], repo: match[2].replace(/\.git$/, "") };
 }
 
-function extractEnvVarsFromContent(content: string): string[] {
-  const vars: string[] = [];
+// --- Env var parsing ---
+
+interface ParsedEnvVar {
+  key: string;
+  default_value: string;
+}
+
+function extractEnvVarsFromContent(content: string): ParsedEnvVar[] {
+  const vars: ParsedEnvVar[] = [];
   for (const line of content.split("\n")) {
     const trimmed = line.trim();
     if (!trimmed || trimmed.startsWith("#")) continue;
-    const match = trimmed.match(/^([A-Z][A-Z0-9_]*)=/);
-    if (match) vars.push(match[1]);
+    const eqIdx = trimmed.indexOf("=");
+    if (eqIdx === -1) continue;
+    const key = trimmed.slice(0, eqIdx).trim();
+    if (!/^[A-Z][A-Z0-9_]*$/.test(key)) continue;
+    const value = trimmed.slice(eqIdx + 1).trim();
+    vars.push({ key, default_value: value });
   }
   return vars;
 }
@@ -79,7 +92,6 @@ serve(async (req) => {
       return CONFIG_FILES.includes(basename) || CONFIG_FILES.includes(f);
     }).slice(0, 15);
 
-    // Also find env example files
     const envFilesToFetch = allFiles.filter((f) => {
       const basename = f.split("/").pop() || "";
       return ENV_FILES.includes(basename);
@@ -95,35 +107,57 @@ serve(async (req) => {
       })
     );
 
-    // Extract env vars from env example files
-    const detectedEnvVars: string[] = [];
+    // Extract env vars with their default values from .env.example files ONLY
+    const parsedEnvVars: ParsedEnvVar[] = [];
     for (const [path, content] of Object.entries(fileContents)) {
       const basename = path.split("/").pop() || "";
       if (ENV_FILES.includes(basename)) {
-        detectedEnvVars.push(...extractEnvVarsFromContent(content));
+        parsedEnvVars.push(...extractEnvVarsFromContent(content));
       }
     }
-    const uniqueEnvVars = [...new Set(detectedEnvVars)];
+    // Deduplicate by key
+    const uniqueEnvVars = parsedEnvVars.filter(
+      (v, i, arr) => arr.findIndex((x) => x.key === v.key) === i
+    );
 
-    // Build AI prompt
+    // Build AI prompt for deploy config
     const treeStr = allFiles.slice(0, 200).join("\n");
     const configStr = Object.entries(fileContents)
       .map(([path, content]) => `--- ${path} ---\n${content}`)
       .join("\n\n");
 
+    const envVarsList = uniqueEnvVars.map(v =>
+      `${v.key}=${v.default_value}`
+    ).join("\n");
+
     const systemPrompt = `You are a deployment configuration expert. Given a GitHub repository's file tree and config files, analyze the project and return a JSON deployment configuration.
 
 You MUST respond with ONLY valid JSON (no markdown, no explanation) in this exact format:
 {
-  "language": "string (e.g. JavaScript, Python, Go, Rust, Java, etc.)",
-  "framework": "string (e.g. React, Next.js, Django, Flask, Express, FastAPI, etc.)",
-  "install_cmd": "string (command to install dependencies)",
-  "build_cmd": "string (command to build the project, empty string if none needed)",
-  "start_cmd": "string (command to start the application)",
-  "port": number (the port the app listens on),
-  "dockerfile_content": "string (a complete Dockerfile to build and run this project)",
-  "required_env_vars": ["array of env var names that MUST be set for the app to work (e.g. API keys, database URLs, secrets). Include vars from .env.example files and any referenced in code. Do NOT include optional or cosmetic vars."]
+  "language": "string",
+  "framework": "string",
+  "install_cmd": "string",
+  "build_cmd": "string",
+  "start_cmd": "string",
+  "port": number,
+  "dockerfile_content": "string (a complete Dockerfile)",
+  "env_vars": [
+    {
+      "key": "VAR_NAME",
+      "value": "suggested_value_or_empty",
+      "needs_user_input": true/false,
+      "description": "short explanation"
+    }
+  ]
 }
+
+CRITICAL RULES for env_vars:
+- ONLY include variables that exist in the .env.example file provided below. Do NOT invent new variables.
+- For each variable, decide:
+  - If it has a sensible default value (like a port number, boolean flag, localhost URL, deployment mode), set "value" to that default and "needs_user_input" to false.
+  - If it's a database URL pointing to localhost, generate a working Docker-compatible value (use host.docker.internal instead of localhost) and set "needs_user_input" to false.
+  - If it's a SECRET, API KEY, or external service credential (like OPENAI_API_KEY, STRIPE_KEY, etc.), set "value" to "" and "needs_user_input" to true.
+  - If the .env.example already has a value, use that value and set "needs_user_input" to false.
 
 Rules for the Dockerfile:
 - Use multi-stage builds when appropriate
@@ -144,7 +178,7 @@ ${treeStr}
 Config file contents:
 ${configStr}
 
-${uniqueEnvVars.length > 0 ? `\nDetected env vars from .env.example files: ${uniqueEnvVars.join(", ")}` : ""}`;
+${uniqueEnvVars.length > 0 ? `\nEnvironment variables from .env.example (ONLY use these, do not add others):\n${envVarsList}` : "\nNo .env.example file found. Set env_vars to an empty array."}`;
 
     const aiResponse = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
       method: "POST",
@@ -189,9 +223,23 @@ ${uniqueEnvVars.length > 0 ? `\nDetected env vars from .env.example files: ${uni
       throw new Error("AI returned invalid deployment config");
     }
 
-    // Merge env vars: AI-detected + file-detected
-    const aiEnvVars: string[] = deployConfig.required_env_vars || [];
-    const allEnvVars = [...new Set([...uniqueEnvVars, ...aiEnvVars])];
+    // Use AI-generated env_vars (which are strictly from .env.example)
+    // Fallback: if AI didn't return env_vars, build from parsed file
+    let envVarsResult = deployConfig.env_vars || [];
+    if (!Array.isArray(envVarsResult) || envVarsResult.length === 0) {
+      envVarsResult = uniqueEnvVars.map(v => ({
+        key: v.key,
+        value: v.default_value,
+        needs_user_input: false,
+        description: "",
+      }));
+    }
+
+    // Safety: filter out any vars the AI hallucinated that aren't in .env.example
+    if (uniqueEnvVars.length > 0) {
+      const allowedKeys = new Set(uniqueEnvVars.map(v => v.key));
+      envVarsResult = envVarsResult.filter((v: any) => allowedKeys.has(v.key));
+    }
 
     // Fetch repo metadata
     const repoRes = await fetch(`https://api.github.com/repos/${owner}/${repo}`, {
@@ -213,10 +261,19 @@ ${uniqueEnvVars.length > 0 ? `\nDetected env vars from .env.example files: ${uni
     return new Response(
       JSON.stringify({
         repo: repoMeta,
-        deploy_config: deployConfig,
+        deploy_config: {
+          language: deployConfig.language,
+          framework: deployConfig.framework,
+          install_cmd: deployConfig.install_cmd,
+          build_cmd: deployConfig.build_cmd,
+          start_cmd: deployConfig.start_cmd,
+          port: deployConfig.port,
+          dockerfile_content: deployConfig.dockerfile_content,
+        },
         detected_stack: detectedStack,
         files_analyzed: Object.keys(fileContents),
-        required_env_vars: allEnvVars,
+        env_vars: envVarsResult,
+        required_env_vars: envVarsResult.map((v: any) => v.key),
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
