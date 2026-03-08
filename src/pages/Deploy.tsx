@@ -675,24 +675,35 @@ const Deploy = () => {
                     )}
                     
                     {/* Install missing services */}
-                    {neededNotRunning.length > 0 && (
+                    {notRunning.length > 0 && (
                       <div className="mb-4 rounded-lg border border-border bg-card/30 p-3">
-                        <p className="text-xs text-muted-foreground mb-2">Need these services on your server?</p>
+                        <p className="text-xs font-medium text-muted-foreground mb-1">Services available to install on your server</p>
+                        {neededNotRunning.length > 0 && (
+                          <p className="text-xs text-destructive mb-2">⚠ This project requires services marked in red</p>
+                        )}
                         <div className="flex flex-wrap gap-2">
-                          {neededNotRunning.map(svc => (
-                            <Button
-                              key={svc.service_type}
-                              variant="outline"
-                              size="sm"
-                              className="gap-1.5 text-xs border-primary/30 hover:border-primary hover:bg-primary/5"
-                              onClick={() => {
-                                toast.info(`To install ${svc.display_name}, run the install command on your VPS and update the service config in Settings.`);
-                              }}
-                            >
-                              <Download className="h-3 w-3" />
-                              Install {svc.display_name}
-                            </Button>
-                          ))}
+                          {notRunning.map(svc => {
+                            const isNeeded = neededNotRunning.some(n => n.service_type === svc.service_type);
+                            return (
+                              <Button
+                                key={svc.service_type}
+                                variant="outline"
+                                size="sm"
+                                className={`gap-1.5 text-xs ${
+                                  isNeeded 
+                                    ? "border-destructive/50 text-destructive hover:border-destructive hover:bg-destructive/5" 
+                                    : "border-primary/30 hover:border-primary hover:bg-primary/5"
+                                }`}
+                                onClick={() => {
+                                  toast.info(`To install ${svc.display_name}, run the install command on your VPS and update the service config in Settings.`);
+                                }}
+                              >
+                                <Download className="h-3 w-3" />
+                                Install {svc.display_name}
+                                {isNeeded && <span className="text-[10px] opacity-70">(required)</span>}
+                              </Button>
+                            );
+                          })}
                         </div>
                       </div>
                     )}
