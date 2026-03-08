@@ -7,6 +7,8 @@ export interface DeployConfig {
   port: number;
   dockerfile_content: string;
   detected_services?: string[];
+  confidence?: number | null;
+  confidence_notes?: string;
 }
 
 interface DeployRequest {
