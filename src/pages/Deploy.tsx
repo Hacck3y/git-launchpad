@@ -67,6 +67,7 @@ const languageColors: Record<string, string> = {
 const Deploy = () => {
   const [searchParams] = useSearchParams();
   const initialRepo = searchParams.get("repo") || "";
+  const { user } = useAuth();
 
   const [step, setStep] = useState(1);
   const [repoUrl, setRepoUrl] = useState(initialRepo);
