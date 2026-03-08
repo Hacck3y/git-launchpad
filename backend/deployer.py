@@ -261,26 +261,76 @@ class Deployer:
                 pass
         return {}
 
-    def _check_container_health(self, container_name: str) -> tuple:
-        for attempt in range(6):
+    def _check_port_open(self, port: int, timeout: float = 2.0) -> bool:
+        """Check if a port is actually accepting TCP connections."""
+        import socket
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=timeout):
+                return True
+        except (ConnectionRefusedError, OSError, socket.timeout):
+            return False
+
+    def _check_http_health(self, port: int, timeout: float = 3.0) -> bool:
+        """Try an HTTP GET to the port — accept any response (even 404/500) as 'alive'."""
+        try:
+            req = urllib.request.Request(f"http://127.0.0.1:{port}/", method="GET")
+            with urllib.request.urlopen(req, timeout=timeout):
+                return True
+        except urllib.error.HTTPError:
+            # 404, 500, etc. — server IS responding
+            return True
+        except Exception:
+            return False
+
+    def _check_container_health(self, container_name: str, app_port: int = None) -> tuple:
+        """Verify container is running AND port is actually accepting connections."""
+        for attempt in range(10):  # up to 50s total
             time.sleep(5)
             try:
+                # Step 1: Is container process still alive?
                 result = subprocess.run(
                     ["docker", "inspect", "-f", "{{.State.Running}}", container_name],
                     capture_output=True, timeout=10,
                 )
                 state = result.stdout.decode().strip()
-                if state == "true":
-                    return True, ""
-                elif state == "false":
+
+                if state == "false":
                     logs = subprocess.run(
                         ["docker", "logs", "--tail", "50", container_name],
                         capture_output=True, timeout=10,
                     )
                     error_log = logs.stderr.decode() or logs.stdout.decode()
                     return False, error_log[:1500]
-            except Exception:
+
+                if state != "true":
+                    continue
+
+                # Step 2: Is the port accepting TCP connections?
+                if app_port and self._check_port_open(app_port):
+                    # Step 3: Does HTTP respond? (optional bonus — TCP open is enough)
+                    self._check_http_health(app_port)
+                    return True, ""
+
+                # Container running but port not open yet — keep waiting
+                if app_port:
+                    print(f"[HEALTH] Container running but port {app_port} not open yet (attempt {attempt+1})")
+                    continue
+                else:
+                    # No port to check, just trust container state
+                    return True, ""
+
+            except Exception as e:
+                print(f"[HEALTH] Check error: {e}")
                 continue
+
+        # Timed out — container may be running but port never opened
+        if app_port:
+            logs = subprocess.run(
+                ["docker", "logs", "--tail", "80", container_name],
+                capture_output=True, timeout=10,
+            )
+            error_log = logs.stderr.decode() or logs.stdout.decode()
+            return False, f"PORT_NOT_OPEN: Container is running but port {app_port} never started accepting connections.\n{error_log[:1500]}"
         return False, "Container health check timed out"
 
     def _cleanup_container(self, container_name: str):
