@@ -153,6 +153,8 @@ const Deploy = () => {
     setDeployError(null);
     setDeployLogs([]);
     setPollFailCount(0);
+    setLastStatusChange(Date.now());
+    setLastStatus("");
     setStep(3);
 
     try {
