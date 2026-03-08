@@ -884,6 +884,9 @@ class Deployer:
 
                 companion_info = self._start_companion_services(deploy_id, network_name, detected_services)
 
+                # Wait for all services to be fully initialized before starting the app
+                self._wait_for_companion_services(deploy_id, companion_info, network_name)
+
                 # Inject companion env vars into the app's env
                 for svc_name, svc_data in companion_info.items():
                     for env_key, env_val in svc_data.get("inject_env", {}).items():
