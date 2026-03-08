@@ -59,6 +59,51 @@ export type Database = {
         }
         Relationships: []
       }
+      platform_services: {
+        Row: {
+          connection_url: string | null
+          created_at: string
+          display_name: string
+          env_key_patterns: string[]
+          host: string | null
+          id: string
+          is_running: boolean
+          password: string | null
+          port: number | null
+          service_type: string
+          updated_at: string
+          username: string | null
+        }
+        Insert: {
+          connection_url?: string | null
+          created_at?: string
+          display_name: string
+          env_key_patterns?: string[]
+          host?: string | null
+          id?: string
+          is_running?: boolean
+          password?: string | null
+          port?: number | null
+          service_type: string
+          updated_at?: string
+          username?: string | null
+        }
+        Update: {
+          connection_url?: string | null
+          created_at?: string
+          display_name?: string
+          env_key_patterns?: string[]
+          host?: string | null
+          id?: string
+          is_running?: boolean
+          password?: string | null
+          port?: number | null
+          service_type?: string
+          updated_at?: string
+          username?: string | null
+        }
+        Relationships: []
+      }
       profiles: {
         Row: {
           avatar_url: string | null
