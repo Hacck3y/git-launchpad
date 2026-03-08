@@ -340,35 +340,6 @@ class Deployer:
                 except Exception:
                     pass  # Already connected with alias during run
 
-                # Wait for service to be healthy
-                health_timeout = svc_config.get("health_timeout", 15)
-                health_cmd = svc_config.get("health_cmd")
-                ready = False
-
-                for attempt in range(health_timeout):
-                    time.sleep(1)
-                    try:
-                        container.reload()
-                        if container.status != "running":
-                            continue
-                        if health_cmd:
-                            exit_code, _ = container.exec_run(health_cmd)
-                            if exit_code == 0:
-                                ready = True
-                                break
-                        else:
-                            # No health check — just wait a bit
-                            if attempt >= 3:
-                                ready = True
-                                break
-                    except Exception:
-                        continue
-
-                if ready:
-                    self._emit_log(deploy_id, f"✓ {svc_name} is ready")
-                else:
-                    self._emit_log(deploy_id, f"⚠ {svc_name} may not be fully ready (continuing anyway)")
-
                 # Build inject env vars with actual values
                 inject_env = {}
                 for env_key, env_tpl in svc_config.get("inject", {}).items():
@@ -391,6 +362,70 @@ class Deployer:
                 print(f"[DOCKER] Failed to start companion {svc_name}: {e}")
 
         return service_info
+
+    def _wait_for_companion_services(self, deploy_id: str, service_info: Dict[str, Dict[str, Any]],
+                                      network_name: str):
+        """Wait for all companion services to be fully ready before starting the app.
+        Uses TCP connection checks and container health commands."""
+        if not service_info:
+            return
+
+        self._emit_log(deploy_id, "▶ Waiting for services to be ready...")
+
+        for svc_name, svc_data in service_info.items():
+            svc_config = SERVICE_MAP.get(svc_name, {})
+            container_name = svc_data["container_name"]
+            svc_port = svc_data["port"]
+            health_timeout = svc_config.get("health_timeout", 30)
+            health_cmd = svc_config.get("health_cmd")
+
+            self._emit_log(deploy_id, f"  ⏳ Waiting for {svc_name} (max {health_timeout}s)...")
+            ready = False
+            start_time = time.time()
+
+            while time.time() - start_time < health_timeout:
+                try:
+                    container = self.docker.containers.get(container_name)
+                    container.reload()
+
+                    if container.status in ("exited", "dead"):
+                        logs = container.logs(tail=20).decode("utf-8", errors="replace")
+                        self._emit_log(deploy_id, f"  ✗ {svc_name} exited unexpectedly:\n{logs[-500:]}")
+                        break
+
+                    if container.status != "running":
+                        time.sleep(1)
+                        continue
+
+                    # Try health command first (more reliable than TCP for initialization)
+                    if health_cmd:
+                        exit_code, output = container.exec_run(health_cmd)
+                        if exit_code == 0:
+                            ready = True
+                            break
+                    else:
+                        # No health check command — use TCP probe via exec
+                        # We can't TCP from host to container by name, so use exec
+                        tcp_check_cmd = ["sh", "-c", f"(echo > /dev/tcp/localhost/{svc_port}) 2>/dev/null"]
+                        exit_code, _ = container.exec_run(tcp_check_cmd)
+                        if exit_code == 0:
+                            ready = True
+                            break
+
+                except NotFound:
+                    self._emit_log(deploy_id, f"  ✗ {svc_name} container disappeared")
+                    break
+                except Exception as e:
+                    print(f"[HEALTH] {svc_name} check error: {e}")
+
+                time.sleep(2)
+
+            if ready:
+                elapsed = round(time.time() - start_time, 1)
+                self._emit_log(deploy_id, f"  ✓ {svc_name} ready ({elapsed}s)")
+            else:
+                self._emit_log(deploy_id, f"  ⚠ {svc_name} may not be fully ready after {health_timeout}s (proceeding anyway)")
+
 
     def _cleanup_companion_services(self, deploy_id: str):
         """Stop and remove all companion service containers for a deployment."""
