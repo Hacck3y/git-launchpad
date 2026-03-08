@@ -917,13 +917,13 @@ const Deploy = () => {
 
               {/* Live log output */}
               {deployLogs.length > 0 && (
-                <div className="mt-4 rounded-lg border border-border bg-background/80 p-3 max-h-40 overflow-y-auto">
+                <div className="mt-4 rounded-lg border border-border bg-background/80 p-3 max-h-64 overflow-y-auto" ref={(el) => { if (el) el.scrollTop = el.scrollHeight; }}>
                   <p className="text-xs text-muted-foreground mb-2 uppercase tracking-wider">Deploy Log</p>
                   {deployLogs.map((log, i) => (
                     <p
                       key={i}
-                      className={`font-mono text-xs leading-relaxed ${
-                        log.startsWith("✗") ? "text-destructive" : log.startsWith("⚠") ? "text-warning" : log.startsWith("✓") ? "text-success" : log.startsWith("🤖") ? "text-primary" : "text-muted-foreground"
+                      className={`font-mono text-[11px] leading-relaxed ${
+                        log.startsWith("✗") ? "text-destructive" : log.startsWith("⚠") ? "text-warning" : log.startsWith("✓") ? "text-success" : log.startsWith("🤖") ? "text-primary" : log.startsWith("📦") ? "text-muted-foreground/80" : "text-muted-foreground"
                       }`}
                     >
                       {log}
