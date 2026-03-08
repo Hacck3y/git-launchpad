@@ -932,6 +932,39 @@ const Deploy = () => {
                 )}
               </div>
 
+              {/* AI Fix Status — show diagnosis and retry attempts */}
+              {!deployError && deployLogs.some(l => l.startsWith("🤖")) && (
+                <motion.div
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className="mt-4 rounded-lg border border-primary/30 bg-primary/5 p-4"
+                >
+                  <div className="flex items-start gap-2">
+                    <Loader2 className="h-4 w-4 text-primary animate-spin shrink-0 mt-0.5" />
+                    <div>
+                      <p className="font-semibold text-primary text-sm">AI Auto-Fix in Progress</p>
+                      {(() => {
+                        const aiLogs = deployLogs.filter(l => l.startsWith("🤖"));
+                        const attemptLog = aiLogs.find(l => l.includes("attempt"));
+                        const diagnosisLog = aiLogs.find(l => l.includes("diagnosis:"));
+                        return (
+                          <>
+                            {attemptLog && (
+                              <p className="text-xs text-primary/80 mt-1 font-mono">{attemptLog.replace("🤖 ", "")}</p>
+                            )}
+                            {diagnosisLog && (
+                              <p className="text-sm text-foreground mt-2">
+                                💡 {diagnosisLog.replace("🤖 ", "").replace(/\[Attempt \d+\] AI diagnosis: /, "")}
+                              </p>
+                            )}
+                          </>
+                        );
+                      })()}
+                    </div>
+                  </div>
+                </motion.div>
+              )}
+
               {/* Error banner */}
               {deployError && (
                 <motion.div
@@ -941,12 +974,67 @@ const Deploy = () => {
                 >
                   <div className="flex items-start gap-2">
                     <AlertTriangle className="h-5 w-5 text-destructive shrink-0 mt-0.5" />
-                    <div>
-                      <p className="font-semibold text-destructive text-sm">Deployment Error</p>
-                      <p className="text-sm text-destructive/80 mt-1 font-mono">{deployError}</p>
+                    <div className="flex-1">
+                      <p className="font-semibold text-destructive text-sm">Deployment Failed</p>
+
+                      {/* Show AI diagnosis if available */}
+                      {(() => {
+                        const aiDiagnosis = deployLogs
+                          .filter(l => l.startsWith("🤖") && l.includes("diagnosis:"))
+                          .pop();
+                        const retryCount = deployLogs
+                          .filter(l => l.startsWith("🤖") && l.includes("attempt"))
+                          .length;
+
+                        return (
+                          <>
+                            {aiDiagnosis && (
+                              <div className="mt-2 rounded-md bg-card/50 border border-border p-3">
+                                <p className="text-xs font-medium text-muted-foreground mb-1">AI Diagnosis</p>
+                                <p className="text-sm text-foreground">
+                                  {aiDiagnosis.replace("🤖 ", "").replace(/\[Attempt \d+\] AI diagnosis: /, "")}
+                                </p>
+                              </div>
+                            )}
+                            {retryCount > 0 && (
+                              <p className="text-xs text-muted-foreground mt-2">
+                                AI attempted {retryCount} fix{retryCount > 1 ? "es" : ""} before giving up.
+                              </p>
+                            )}
+                          </>
+                        );
+                      })()}
+
+                      {/* Actionable suggestions based on error content */}
+                      <div className="mt-3 rounded-md bg-card/50 border border-border p-3">
+                        <p className="text-xs font-medium text-muted-foreground mb-1.5">💡 What you can do</p>
+                        <ul className="text-xs text-foreground space-y-1 list-disc list-inside">
+                          {deployError.toLowerCase().includes("database") || deployError.toLowerCase().includes("mysql") || deployError.toLowerCase().includes("postgres") || deployError.toLowerCase().includes("mongo") ? (
+                            <li>This app needs a database — make sure the connection URL is correct in env vars</li>
+                          ) : null}
+                          {deployError.toLowerCase().includes("port") ? (
+                            <li>The app couldn't bind to a port — check if the PORT env var is set correctly</li>
+                          ) : null}
+                          {deployError.toLowerCase().includes("build") ? (
+                            <li>The build step failed — check if all dependencies are listed in package.json</li>
+                          ) : null}
+                          <li>Go back and double-check your environment variables</li>
+                          <li>Make sure the repo has a valid start script or Dockerfile</li>
+                        </ul>
+                      </div>
+
+                      {/* Raw error (collapsed) */}
+                      <details className="mt-3">
+                        <summary className="text-xs text-muted-foreground cursor-pointer hover:text-foreground">
+                          View raw error
+                        </summary>
+                        <pre className="mt-2 text-[11px] font-mono text-destructive/80 whitespace-pre-wrap break-all max-h-32 overflow-y-auto bg-background/50 rounded p-2 border border-border">
+                          {deployError}
+                        </pre>
+                      </details>
                     </div>
                   </div>
-                  <div className="mt-3 flex gap-2">
+                  <div className="mt-4 flex gap-2">
                     <Button
                       size="sm"
                       variant="outline"
@@ -957,26 +1045,48 @@ const Deploy = () => {
                       }}
                       className="gap-1.5 border-destructive/30 text-destructive hover:bg-destructive/10"
                     >
-                      <ArrowLeft className="h-3.5 w-3.5" /> Go Back & Retry
+                      <ArrowLeft className="h-3.5 w-3.5" /> Go Back & Fix
                     </Button>
                   </div>
                 </motion.div>
               )}
 
-              {/* Live log output */}
+              {/* Live log output — compact during deploy, expandable on error */}
               {deployLogs.length > 0 && (
-                <div className="mt-4 rounded-lg border border-border bg-background/80 p-3 max-h-64 overflow-y-auto" ref={(el) => { if (el) el.scrollTop = el.scrollHeight; }}>
-                  <p className="text-xs text-muted-foreground mb-2 uppercase tracking-wider">Deploy Log</p>
-                  {deployLogs.map((log, i) => (
-                    <p
-                      key={i}
-                      className={`font-mono text-[11px] leading-relaxed ${
-                        log.startsWith("✗") ? "text-destructive" : log.startsWith("⚠") ? "text-warning" : log.startsWith("✓") ? "text-success" : log.startsWith("🤖") ? "text-primary" : log.startsWith("📦") ? "text-muted-foreground/80" : "text-muted-foreground"
-                      }`}
-                    >
-                      {log}
-                    </p>
-                  ))}
+                <div className="mt-4">
+                  {deployError ? (
+                    <details className="rounded-lg border border-border bg-background/80">
+                      <summary className="p-3 text-xs text-muted-foreground uppercase tracking-wider cursor-pointer hover:text-foreground">
+                        View Full Deploy Logs ({deployLogs.length} lines)
+                      </summary>
+                      <div className="px-3 pb-3 max-h-96 overflow-y-auto">
+                        {deployLogs.map((log, i) => (
+                          <p
+                            key={i}
+                            className={`font-mono text-[11px] leading-relaxed ${
+                              log.startsWith("✗") ? "text-destructive" : log.startsWith("⚠") ? "text-warning" : log.startsWith("✓") ? "text-success" : log.startsWith("🤖") ? "text-primary" : log.startsWith("📦") ? "text-muted-foreground/80" : "text-muted-foreground"
+                            }`}
+                          >
+                            {log}
+                          </p>
+                        ))}
+                      </div>
+                    </details>
+                  ) : (
+                    <div className="rounded-lg border border-border bg-background/80 p-3 max-h-64 overflow-y-auto" ref={(el) => { if (el) el.scrollTop = el.scrollHeight; }}>
+                      <p className="text-xs text-muted-foreground mb-2 uppercase tracking-wider">Deploy Log</p>
+                      {deployLogs.map((log, i) => (
+                        <p
+                          key={i}
+                          className={`font-mono text-[11px] leading-relaxed ${
+                            log.startsWith("✗") ? "text-destructive" : log.startsWith("⚠") ? "text-warning" : log.startsWith("✓") ? "text-success" : log.startsWith("🤖") ? "text-primary" : log.startsWith("📦") ? "text-muted-foreground/80" : "text-muted-foreground"
+                          }`}
+                        >
+                          {log}
+                        </p>
+                      ))}
+                    </div>
+                  )}
                 </div>
               )}
 
