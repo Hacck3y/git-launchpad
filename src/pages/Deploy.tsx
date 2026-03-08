@@ -141,7 +141,11 @@ const Deploy = () => {
           if (ev.key.trim()) envVarsObj[ev.key.trim()] = ev.value;
         });
       }
-      const result = await deployRepo({ repo_url: repoUrl, env_vars: envVarsObj });
+      const result = await deployRepo({
+        repo_url: repoUrl,
+        env_vars: envVarsObj,
+        deploy_config: deployConfig || undefined,
+      });
       if (result.deploy_id || result.deployment_id || result.id) {
         setDeployId(result.deploy_id || result.deployment_id || result.id);
       } else {
