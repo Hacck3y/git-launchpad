@@ -24,6 +24,7 @@ import { Progress } from "@/components/ui/progress";
 import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
 import Navbar from "@/components/Navbar";
+import { deployRepo, getDeployment } from "@/lib/api";
 
 // Types
 interface RepoInfo {
