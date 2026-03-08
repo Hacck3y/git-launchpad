@@ -141,6 +141,9 @@ const Deploy = () => {
     setDeploying(true);
     setDeploySteps(INITIAL_STEPS);
     setDeployProgress(0);
+    setDeployError(null);
+    setDeployLogs([]);
+    setPollFailCount(0);
     setStep(3);
 
     try {
@@ -150,6 +153,7 @@ const Deploy = () => {
           if (ev.key.trim()) envVarsObj[ev.key.trim()] = ev.value;
         });
       }
+      setDeployLogs(prev => [...prev, `→ Sending deploy request to server...`]);
       const result = await deployRepo({
         repo_url: repoUrl,
         env_vars: envVarsObj,
@@ -159,6 +163,7 @@ const Deploy = () => {
       const newDeployId = result.deploy_id || result.deployment_id || result.id;
       if (newDeployId) {
         setDeployId(newDeployId);
+        setDeployLogs(prev => [...prev, `→ Deploy ID: ${newDeployId}`, `→ Polling for status updates...`]);
 
         // Save deployment to database
         if (user) {
@@ -173,11 +178,17 @@ const Deploy = () => {
           } as any);
         }
       } else {
-        toast.error("Deploy failed: " + (result.error || "Unknown error"));
+        const errMsg = result.error || "No deploy ID returned from server";
+        setDeployError(errMsg);
+        setDeployLogs(prev => [...prev, `✗ Error: ${errMsg}`]);
+        toast.error("Deploy failed: " + errMsg);
         setDeploying(false);
       }
     } catch (err: any) {
-      toast.error("Deploy request failed: " + err.message);
+      const errMsg = err.message || "Could not reach deploy server";
+      setDeployError(errMsg);
+      setDeployLogs(prev => [...prev, `✗ Request failed: ${errMsg}`]);
+      toast.error("Deploy request failed: " + errMsg);
       setDeploying(false);
     }
   };
