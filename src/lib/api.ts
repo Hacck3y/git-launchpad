@@ -12,6 +12,7 @@ interface DeployRequest {
   repo_url: string;
   env_vars: Record<string, string>;
   deploy_config?: DeployConfig;
+  ttl_minutes?: number;
 }
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL || "https://157.245.109.239";
