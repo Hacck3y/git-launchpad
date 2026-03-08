@@ -16,6 +16,7 @@ interface DeployRequest {
 }
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL || "https://157.245.109.239";
+const WS_BASE_URL = BASE_URL.replace(/^https?:\/\//, (m: string) => m.startsWith("https") ? "wss://" : "ws://");
 
 export async function analyzeRepo(repoUrl: string): Promise<{
   repo: {
