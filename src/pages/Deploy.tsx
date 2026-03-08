@@ -140,13 +140,11 @@ const Deploy = () => {
       } else {
         toast.error("Deploy failed: " + (result.error || "Unknown error"));
         setDeploying(false);
-        setStep(2);
       }
     } catch (err: any) {
       toast.error("Deploy request failed: " + err.message);
       setDeploying(false);
     }
-    setStep(2);
   };
 
   // Poll deployment status
@@ -205,7 +203,7 @@ const Deploy = () => {
           setDeploying(false);
         }
       } catch {
-        setStep(2);
+        
         // Ignore transient fetch errors, keep polling
       }
     }, 3000);
