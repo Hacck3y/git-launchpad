@@ -63,6 +63,16 @@ interface PlatformServiceInfo {
   is_running: boolean;
 }
 
+interface CompanionService {
+  service: string;
+  image: string;
+  hostname: string;
+  port: number;
+  password: string | null;
+  inject_env: Record<string, string>;
+  container_name: string;
+}
+
 interface DeployStep {
   label: string;
   status: "pending" | "running" | "done";
