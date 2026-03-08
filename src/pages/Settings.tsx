@@ -100,41 +100,11 @@ const Settings = () => {
                 <User className="h-5 w-5 text-primary" />
                 Profile
               </CardTitle>
-              <CardDescription>Update your display name and avatar</CardDescription>
+              <CardDescription>Update your display name</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="flex items-center gap-4 mb-4">
-                <Avatar className="h-16 w-16">
-                  <AvatarImage src={avatarUrl} />
-                  <AvatarFallback className="bg-primary/10 text-primary text-xl">
-                    {(displayName || "U").charAt(0).toUpperCase()}
-                  </AvatarFallback>
-                </Avatar>
-                <div className="flex-1">
-                  <p className="text-sm text-muted-foreground">{profile?.email || user.email}</p>
-                </div>
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="displayName">Display Name</Label>
-                <Input
-                  id="displayName"
-                  value={displayName}
-                  onChange={(e) => setDisplayName(e.target.value)}
-                  placeholder="Your display name"
-                  className="bg-input border-border"
-                />
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="avatarUrl">Avatar URL</Label>
-                <Input
-                  id="avatarUrl"
-                  value={avatarUrl}
-                  onChange={(e) => setAvatarUrl(e.target.value)}
-                  placeholder="https://example.com/avatar.png"
-                  className="bg-input border-border"
-                />
+              <div className="mb-4">
+                <p className="text-sm text-muted-foreground">{profile?.email || user.email}</p>
               </div>
 
               <Button onClick={handleSaveProfile} disabled={saving} className="gap-2">
