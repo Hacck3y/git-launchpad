@@ -621,6 +621,28 @@ const Deploy = () => {
                     </span>
                   ))}
                 </div>
+
+                {/* Detected companion services */}
+                {detectedServices.length > 0 && (
+                  <div className="mt-3">
+                    <p className="text-xs text-muted-foreground mb-2 flex items-center gap-1.5">
+                      <Server className="h-3.5 w-3.5 text-primary" /> Auto-provisioned services
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      {detectedServices.map((svc) => (
+                        <span
+                          key={svc}
+                          className="inline-flex items-center rounded-md border border-primary/30 bg-primary/10 px-3 py-1 text-xs font-mono font-medium text-primary"
+                        >
+                          🐳 {svc}
+                        </span>
+                      ))}
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-1.5">
+                      These will be automatically started as companion containers during deploy.
+                    </p>
+                  </div>
+                )}
               </div>
 
               {/* Env vars section */}
