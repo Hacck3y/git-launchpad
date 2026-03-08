@@ -96,24 +96,29 @@ const Deploy = () => {
     }
     setUrlError("");
     setLoadingRepo(true);
+    setAnalyzing(true);
 
-    // Simulate API call
-    await new Promise((r) => setTimeout(r, 800));
-
-    const parts = repoUrl.replace(/\/$/, "").split("/");
-    const owner = parts[parts.length - 2];
-    const repo = parts[parts.length - 1];
-
-    setRepoInfo({
-      name: repo,
-      fullName: `${owner}/${repo}`,
-      description: "A blazing-fast modern web application framework with developer-friendly APIs.",
-      language: "TypeScript",
-      stars: Math.floor(Math.random() * 50000),
-      defaultBranch: "main",
-    });
-    setDetectedStack(["React", "TypeScript", "Vite", "Tailwind CSS"]);
-    setLoadingRepo(false);
+    try {
+      const result = await analyzeRepo(repoUrl);
+      
+      setRepoInfo({
+        name: result.repo.name,
+        fullName: result.repo.fullName,
+        description: result.repo.description,
+        language: result.repo.language,
+        stars: result.repo.stars,
+        defaultBranch: result.repo.defaultBranch,
+      });
+      setDetectedStack(result.detected_stack);
+      setDeployConfig(result.deploy_config);
+      toast.success("AI analyzed your repo successfully!");
+    } catch (err: any) {
+      setUrlError(err.message || "Failed to analyze repository");
+      setRepoInfo(null);
+    } finally {
+      setLoadingRepo(false);
+      setAnalyzing(false);
+    }
   }, [repoUrl]);
 
   useEffect(() => {
