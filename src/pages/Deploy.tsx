@@ -145,7 +145,7 @@ const Deploy = () => {
       setDetectedStack(result.detected_stack);
       setDeployConfig(result.deploy_config);
 
-      // Pre-populate env vars from analysis with AI-generated defaults
+      // Pre-populate env vars from analysis with platform + AI defaults
       if (result.env_vars && result.env_vars.length > 0) {
         setEnvVars(result.env_vars.map((v: any) => ({
           key: v.key,
@@ -153,14 +153,22 @@ const Deploy = () => {
           needs_user_input: v.needs_user_input || false,
           description: v.description || "",
           auto_filled: !v.needs_user_input && !!v.value,
+          platform_provided: v.platform_provided || false,
+          platform_service: v.platform_service || "",
+          platform_display_name: v.platform_display_name || "",
+          platform_running: v.platform_running || false,
+          use_platform: v.platform_provided && v.platform_running ? true : false,
         })));
-        // Only show env section if there are vars needing user input
-        const hasUserInputNeeded = result.env_vars.some((v: any) => v.needs_user_input);
+        const hasUserInputNeeded = result.env_vars.some((v: any) => v.needs_user_input && !v.platform_provided);
         setSkipEnvVars(!hasUserInputNeeded && result.env_vars.every((v: any) => v.value));
       } else if (result.required_env_vars && result.required_env_vars.length > 0) {
-        // Fallback to old format
         setEnvVars(result.required_env_vars.map((key: string) => ({ key, value: "" })));
         setSkipEnvVars(false);
+      }
+
+      // Store platform services info
+      if (result.platform_services) {
+        setPlatformServices(result.platform_services);
       }
 
       toast.success("AI analyzed your repo successfully!");
