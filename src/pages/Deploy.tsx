@@ -201,6 +201,15 @@ const Deploy = () => {
       try {
         const data = await getDeployment(deployId);
         const status = data.status;
+        setPollFailCount(0);
+
+        // Add log for status changes
+        setDeployLogs(prev => {
+          const lastLog = prev[prev.length - 1];
+          const newLog = `→ Status: ${status}`;
+          if (lastLog !== newLog) return [...prev, newLog];
+          return prev;
+        });
 
         // Map API status to deploy steps
         const statusMap: Record<string, number> = {
@@ -230,15 +239,14 @@ const Deploy = () => {
           setDeployProgress(100);
           const liveUrl = data.preview_url || data.url || "";
           setPreviewUrl(liveUrl);
+          setDeployLogs(prev => [...prev, `✓ Live at: ${liveUrl}`]);
 
-          // Calculate countdown from expires_at
           if (data.expires_at) {
             const expiresAt = new Date(data.expires_at).getTime();
             const remaining = Math.max(0, Math.floor((expiresAt - Date.now()) / 1000));
             setCountdown(remaining);
           }
 
-          // Update deployment in database
           if (user) {
             await supabase
               .from("deployments")
@@ -258,12 +266,24 @@ const Deploy = () => {
 
         if (status === "error" || status === "failed") {
           clearInterval(poll);
-          toast.error("Deployment failed: " + (data.error || "Unknown error"));
+          const errMsg = data.error || data.message || data.detail || "Deployment failed on server";
+          setDeployError(errMsg);
+          setDeployLogs(prev => [...prev, `✗ Failed: ${errMsg}`]);
+          toast.error("Deployment failed: " + errMsg);
           setDeploying(false);
         }
-      } catch {
-        
-        // Ignore transient fetch errors, keep polling
+      } catch (err: any) {
+        setPollFailCount(prev => {
+          const newCount = prev + 1;
+          setDeployLogs(logs => [...logs, `⚠ Poll error (${newCount}/10): ${err.message || "Network error"}`]);
+          if (newCount >= 10) {
+            clearInterval(poll);
+            setDeployError("Lost connection to deploy server after 10 retries");
+            setDeployLogs(logs => [...logs, `✗ Gave up after 10 failed poll attempts`]);
+            setDeploying(false);
+          }
+          return newCount;
+        });
       }
     }, 3000);
 
