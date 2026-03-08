@@ -3,43 +3,37 @@ interface DeployRequest {
   env_vars: Record<string, string>;
 }
 
-const API_BASE_URL =
-  import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, "") || "";
-
-function apiUrl(path: string) {
-  const normalizedPath = path.startsWith("/") ? path : `/${path}`;
-  return `${API_BASE_URL}${normalizedPath}`;
-}
-
-async function parseResponse(res: Response) {
-  const text = await res.text();
-  const data = text ? JSON.parse(text) : {};
-
-  if (!res.ok) {
-    const message = data?.detail || data?.error || `HTTP ${res.status}`;
-    throw new Error(typeof message === "string" ? message : JSON.stringify(message));
-  }
-
-  return data;
-}
+const BASE_URL = "http://157.245.109.239:3000";
 
 export async function deployRepo(req: DeployRequest) {
-  const res = await fetch(apiUrl("/api/deploy"), {
+  const res = await fetch(`${BASE_URL}/api/deploy`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(req),
   });
-  return parseResponse(res);
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data?.detail || data?.error || `HTTP ${res.status}`);
+  }
+  return res.json();
 }
 
 export async function getDeployment(deployId: string) {
-  const res = await fetch(apiUrl(`/api/deploy/${deployId}`));
-  return parseResponse(res);
+  const res = await fetch(`${BASE_URL}/api/deploy/${deployId}`);
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data?.detail || data?.error || `HTTP ${res.status}`);
+  }
+  return res.json();
 }
 
 export async function killDeployment(deployId: string) {
-  const res = await fetch(apiUrl(`/api/deploy/${deployId}`), {
+  const res = await fetch(`${BASE_URL}/api/deploy/${deployId}`, {
     method: "DELETE",
   });
-  return parseResponse(res);
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data?.detail || data?.error || `HTTP ${res.status}`);
+  }
+  return res.json();
 }
