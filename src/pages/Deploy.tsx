@@ -342,6 +342,11 @@ const Deploy = () => {
           setPreviewUrl(liveUrl);
           setDeployLogs(prev => [...prev, `✓ Live at: ${liveUrl}`]);
 
+          // Capture companion services info
+          if (data.companion_services) {
+            setCompanionServices(data.companion_services);
+          }
+
           if (data.expires_at) {
             const expiresAt = new Date(data.expires_at).getTime();
             const remaining = Math.max(0, Math.floor((expiresAt - Date.now()) / 1000));
