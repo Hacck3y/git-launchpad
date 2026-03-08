@@ -42,6 +42,9 @@ interface RepoInfo {
 interface EnvVar {
   key: string;
   value: string;
+  needs_user_input?: boolean;
+  description?: string;
+  auto_filled?: boolean;
 }
 
 interface DeployStep {
