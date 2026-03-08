@@ -181,9 +181,40 @@ class Deployer:
     def __init__(self):
         self.deployments: Dict[str, Dict[str, Any]] = {}
         self._lock = threading.Lock()
+        self._log_subscribers: Dict[str, List[Any]] = {}  # deploy_id -> list of queues
         # Initialize docker-py client from local socket
         self.docker = docker.from_env()
         print(f"[DOCKER] Connected to Docker daemon: {self.docker.version().get('Version', 'unknown')}")
+
+    def subscribe_logs(self, deploy_id: str):
+        """Subscribe to real-time logs for a deployment. Returns a queue."""
+        import queue
+        q = queue.Queue()
+        with self._lock:
+            self._log_subscribers.setdefault(deploy_id, []).append(q)
+            # Send existing build_logs as catch-up
+            info = self.deployments.get(deploy_id, {})
+            for line in info.get("build_logs", []):
+                q.put(line)
+        return q
+
+    def unsubscribe_logs(self, deploy_id: str, q):
+        """Remove a subscriber queue."""
+        with self._lock:
+            subs = self._log_subscribers.get(deploy_id, [])
+            if q in subs:
+                subs.remove(q)
+
+    def _emit_log(self, deploy_id: str, line: str):
+        """Send a log line to all subscribers and store it."""
+        with self._lock:
+            if deploy_id in self.deployments:
+                self.deployments[deploy_id].setdefault("build_logs", []).append(line)
+            for q in self._log_subscribers.get(deploy_id, []):
+                try:
+                    q.put_nowait(line)
+                except Exception:
+                    pass
 
     def start_deploy(
         self,
@@ -209,6 +240,7 @@ class Deployer:
                 "deploy_config": deploy_config,
                 "ai_fix_attempts": 0,
                 "ai_fix_log": [],
+                "build_logs": [],
             }
 
         thread = threading.Thread(
