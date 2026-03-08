@@ -1144,6 +1144,8 @@ const Deploy = () => {
                     setDeployError(null);
                     setDeployLogs([]);
                     setPollFailCount(0);
+                    setDetectedServices([]);
+                    setCompanionServices({});
                   }}
                 >
                   <Rocket className="h-4 w-4" />
