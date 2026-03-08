@@ -42,6 +42,9 @@ interface RepoInfo {
 interface EnvVar {
   key: string;
   value: string;
+  needs_user_input?: boolean;
+  description?: string;
+  auto_filled?: boolean;
 }
 
 interface DeployStep {
@@ -124,8 +127,20 @@ const Deploy = () => {
       setDetectedStack(result.detected_stack);
       setDeployConfig(result.deploy_config);
 
-      // Pre-populate env vars from analysis
-      if (result.required_env_vars && result.required_env_vars.length > 0) {
+      // Pre-populate env vars from analysis with AI-generated defaults
+      if (result.env_vars && result.env_vars.length > 0) {
+        setEnvVars(result.env_vars.map((v: any) => ({
+          key: v.key,
+          value: v.value || "",
+          needs_user_input: v.needs_user_input || false,
+          description: v.description || "",
+          auto_filled: !v.needs_user_input && !!v.value,
+        })));
+        // Only show env section if there are vars needing user input
+        const hasUserInputNeeded = result.env_vars.some((v: any) => v.needs_user_input);
+        setSkipEnvVars(!hasUserInputNeeded && result.env_vars.every((v: any) => v.value));
+      } else if (result.required_env_vars && result.required_env_vars.length > 0) {
+        // Fallback to old format
         setEnvVars(result.required_env_vars.map((key: string) => ({ key, value: "" })));
         setSkipEnvVars(false);
       }
@@ -352,7 +367,7 @@ const Deploy = () => {
     return `${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
   };
 
-  const addEnvVar = () => setEnvVars([...envVars, { key: "", value: "" }]);
+  const addEnvVar = () => setEnvVars([...envVars, { key: "", value: "", needs_user_input: false }]);
   const removeEnvVar = (index: number) => setEnvVars(envVars.filter((_, i) => i !== index));
   const updateEnvVar = (index: number, field: "key" | "value", val: string) => {
     const updated = [...envVars];
@@ -519,54 +534,95 @@ const Deploy = () => {
                 </div>
               </div>
 
-              {/* Env vars toggle */}
-              <div className="flex items-center justify-between mb-4 rounded-lg border border-border bg-card/50 p-4">
-                <div>
-                  <span className="text-sm">This repo needs no env vars</span>
-                  {!skipEnvVars && envVars.some(v => v.key) && (
-                    <p className="text-xs text-muted-foreground mt-1">
-                      {envVars.filter(v => v.key).length} variable(s) detected — fill in their values
-                    </p>
-                  )}
-                </div>
-                <Switch checked={skipEnvVars} onCheckedChange={setSkipEnvVars} />
-              </div>
+              {/* Env vars section */}
+              {(() => {
+                const userInputVars = envVars.filter(v => v.needs_user_input);
+                const autoFilledVars = envVars.filter(v => !v.needs_user_input && v.key);
+                return (
+                  <>
+                    {/* User-required API keys */}
+                    {userInputVars.length > 0 && (
+                      <div className="mb-4">
+                        <p className="text-sm font-medium mb-2 flex items-center gap-2 text-amber-400">
+                          <AlertTriangle className="h-4 w-4" /> API Keys Required ({userInputVars.length})
+                        </p>
+                        <p className="text-xs text-muted-foreground mb-3">
+                          These secrets are needed for the app to work. Enter them below.
+                        </p>
+                        <div className="space-y-3">
+                          {userInputVars.map((envVar) => {
+                            const originalIdx = envVars.findIndex(v => v.key === envVar.key);
+                            return (
+                              <div key={envVar.key} className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3">
+                                <div className="flex items-center gap-2 mb-2">
+                                  <span className="font-mono text-xs font-semibold text-amber-300">{envVar.key}</span>
+                                  {envVar.description && (
+                                    <span className="text-xs text-muted-foreground">— {envVar.description}</span>
+                                  )}
+                                </div>
+                                <Input
+                                  value={envVar.value}
+                                  onChange={(e) => updateEnvVar(originalIdx, "value", e.target.value)}
+                                  placeholder="Paste your key here..."
+                                  type="password"
+                                  className="font-mono text-xs h-9 bg-card border-border"
+                                />
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
 
-              {/* Env var inputs */}
-              {!skipEnvVars && (
-                <motion.div
-                  initial={{ opacity: 0, height: 0 }}
-                  animate={{ opacity: 1, height: "auto" }}
-                  exit={{ opacity: 0, height: 0 }}
-                  className="space-y-3"
-                >
-                  {envVars.map((envVar, i) => (
-                    <div key={i} className="flex items-center gap-2">
-                      <Input
-                        value={envVar.key}
-                        onChange={(e) => updateEnvVar(i, "key", e.target.value)}
-                        placeholder="KEY"
-                        className="flex-1 font-mono text-xs h-10 bg-card border-border"
-                      />
-                      <Input
-                        value={envVar.value}
-                        onChange={(e) => updateEnvVar(i, "value", e.target.value)}
-                        placeholder="value"
-                        type="password"
-                        className="flex-1 font-mono text-xs h-10 bg-card border-border"
-                      />
-                      {envVars.length > 1 && (
-                        <Button variant="ghost" size="sm" onClick={() => removeEnvVar(i)} className="text-muted-foreground hover:text-destructive">
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </Button>
-                      )}
-                    </div>
-                  ))}
-                  <Button variant="ghost" size="sm" onClick={addEnvVar} className="gap-1.5 text-xs text-muted-foreground hover:text-primary">
-                    <Plus className="h-3.5 w-3.5" /> Add variable
-                  </Button>
-                </motion.div>
-              )}
+                    {/* Auto-filled vars (collapsible) */}
+                    {autoFilledVars.length > 0 && (
+                      <div className="mb-4">
+                        <div className="flex items-center justify-between mb-2">
+                          <p className="text-sm font-medium flex items-center gap-2 text-emerald-400">
+                            <CheckCircle2 className="h-4 w-4" /> Auto-configured ({autoFilledVars.length})
+                          </p>
+                          <span className="text-xs text-muted-foreground">Values auto-generated by AI</span>
+                        </div>
+                        <div className="space-y-2 rounded-lg border border-border bg-card/30 p-3">
+                          {autoFilledVars.map((envVar) => {
+                            const originalIdx = envVars.findIndex(v => v.key === envVar.key);
+                            return (
+                              <div key={envVar.key} className="flex items-center gap-2">
+                                <span className="font-mono text-xs text-emerald-300 min-w-[180px] truncate" title={envVar.key}>
+                                  {envVar.key}
+                                </span>
+                                <Input
+                                  value={envVar.value}
+                                  onChange={(e) => updateEnvVar(originalIdx, "value", e.target.value)}
+                                  placeholder="value"
+                                  className="flex-1 font-mono text-xs h-8 bg-card/50 border-border text-muted-foreground"
+                                />
+                                <Button variant="ghost" size="sm" onClick={() => removeEnvVar(originalIdx)} className="text-muted-foreground hover:text-destructive h-8 w-8 p-0">
+                                  <Trash2 className="h-3 w-3" />
+                                </Button>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* No env vars needed */}
+                    {envVars.filter(v => v.key).length === 0 && (
+                      <div className="flex items-center justify-between mb-4 rounded-lg border border-border bg-card/50 p-4">
+                        <span className="text-sm flex items-center gap-2">
+                          <CheckCircle2 className="h-4 w-4 text-emerald-400" /> No environment variables needed
+                        </span>
+                      </div>
+                    )}
+
+                    {/* Add custom var */}
+                    <Button variant="ghost" size="sm" onClick={addEnvVar} className="gap-1.5 text-xs text-muted-foreground hover:text-primary mb-2">
+                      <Plus className="h-3.5 w-3.5" /> Add custom variable
+                    </Button>
+                  </>
+                );
+              })()}
 
               {/* Duration picker */}
               <div className="mt-6 mb-6">
