@@ -113,6 +113,8 @@ const Deploy = () => {
   const [pollFailCount, setPollFailCount] = useState(0);
   const [lastStatusChange, setLastStatusChange] = useState<number>(Date.now());
   const [lastStatus, setLastStatus] = useState<string>("");
+  const [platformServices, setPlatformServices] = useState<PlatformServiceInfo[]>([]);
+  const [showPlatformValues, setShowPlatformValues] = useState<Record<string, boolean>>({});
 
   const validateUrl = (url: string) => {
     const githubRegex = /^https?:\/\/github\.com\/[\w.-]+\/[\w.-]+\/?$/;
