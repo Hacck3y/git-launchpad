@@ -486,7 +486,36 @@ const Deploy = () => {
                 </motion.div>
               )}
 
-              <div className="mt-8 flex items-center gap-3">
+              {/* Duration picker */}
+              <div className="mt-6 mb-6">
+                <p className="text-sm font-medium mb-3 flex items-center gap-2">
+                  <Timer className="h-4 w-4 text-primary" /> Preview Duration
+                </p>
+                <div className="flex gap-2">
+                  {[
+                    { value: 5, label: "5 min" },
+                    { value: 20, label: "20 min" },
+                    { value: 30, label: "30 min" },
+                  ].map((opt) => (
+                    <button
+                      key={opt.value}
+                      onClick={() => setTtlMinutes(opt.value)}
+                      className={`flex-1 rounded-lg border px-4 py-3 text-sm font-mono font-medium transition-all ${
+                        ttlMinutes === opt.value
+                          ? "border-primary bg-primary/10 text-primary"
+                          : "border-border bg-card/50 text-muted-foreground hover:border-primary/50"
+                      }`}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+                <p className="mt-2 text-xs text-muted-foreground">
+                  Your preview will auto-expire after {ttlMinutes} minutes.
+                </p>
+              </div>
+
+              <div className="flex items-center gap-3">
                 <Button variant="ghost" onClick={() => setStep(1)} className="gap-1.5 text-muted-foreground">
                   <ArrowLeft className="h-4 w-4" /> Back
                 </Button>
