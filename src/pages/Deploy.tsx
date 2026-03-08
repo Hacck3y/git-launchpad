@@ -120,6 +120,13 @@ const Deploy = () => {
       });
       setDetectedStack(result.detected_stack);
       setDeployConfig(result.deploy_config);
+
+      // Pre-populate env vars from analysis
+      if (result.required_env_vars && result.required_env_vars.length > 0) {
+        setEnvVars(result.required_env_vars.map((key: string) => ({ key, value: "" })));
+        setSkipEnvVars(false);
+      }
+
       toast.success("AI analyzed your repo successfully!");
     } catch (err: any) {
       setUrlError(err.message || "Failed to analyze repository");
