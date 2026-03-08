@@ -419,6 +419,8 @@ ${uniqueEnvVars.length > 0 ? `\nEnvironment variables from .env.example (ONLY us
           port: deployConfig.port,
           dockerfile_content: deployConfig.dockerfile_content,
           detected_services: detectedServices,
+          confidence: deployConfig.confidence || null,
+          confidence_notes: deployConfig.confidence_notes || "",
         },
         detected_stack: detectedStack,
         detected_services: detectedServices,
