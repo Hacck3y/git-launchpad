@@ -367,7 +367,7 @@ const Deploy = () => {
     return `${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
   };
 
-  const addEnvVar = () => setEnvVars([...envVars, { key: "", value: "" }]);
+  const addEnvVar = () => setEnvVars([...envVars, { key: "", value: "", needs_user_input: false }]);
   const removeEnvVar = (index: number) => setEnvVars(envVars.filter((_, i) => i !== index));
   const updateEnvVar = (index: number, field: "key" | "value", val: string) => {
     const updated = [...envVars];
