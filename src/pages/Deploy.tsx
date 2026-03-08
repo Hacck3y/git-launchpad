@@ -487,7 +487,14 @@ const Deploy = () => {
 
               {/* Env vars toggle */}
               <div className="flex items-center justify-between mb-4 rounded-lg border border-border bg-card/50 p-4">
-                <span className="text-sm">This repo needs no env vars</span>
+                <div>
+                  <span className="text-sm">This repo needs no env vars</span>
+                  {!skipEnvVars && envVars.some(v => v.key) && (
+                    <p className="text-xs text-muted-foreground mt-1">
+                      {envVars.filter(v => v.key).length} variable(s) detected — fill in their values
+                    </p>
+                  )}
+                </div>
                 <Switch checked={skipEnvVars} onCheckedChange={setSkipEnvVars} />
               </div>
 
