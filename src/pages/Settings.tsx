@@ -6,9 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -31,7 +29,6 @@ const Settings = () => {
   const { user, profile, signOut } = useAuth();
   const { theme, setTheme } = useTheme();
   const [displayName, setDisplayName] = useState("");
-  const [avatarUrl, setAvatarUrl] = useState("");
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
@@ -42,7 +39,6 @@ const Settings = () => {
     }
     if (profile) {
       setDisplayName(profile.display_name || "");
-      setAvatarUrl(profile.avatar_url || "");
     }
   }, [user, profile, navigate]);
 
@@ -52,7 +48,7 @@ const Settings = () => {
     try {
       const { error } = await supabase
         .from("profiles")
-        .update({ display_name: displayName, avatar_url: avatarUrl })
+        .update({ display_name: displayName })
         .eq("user_id", user.id);
       if (error) throw error;
       toast.success("Profile updated successfully");
@@ -103,41 +99,11 @@ const Settings = () => {
                 <User className="h-5 w-5 text-primary" />
                 Profile
               </CardTitle>
-              <CardDescription>Update your display name and avatar</CardDescription>
+              <CardDescription>Update your display name</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="flex items-center gap-4 mb-4">
-                <Avatar className="h-16 w-16">
-                  <AvatarImage src={avatarUrl} />
-                  <AvatarFallback className="bg-primary/10 text-primary text-xl">
-                    {(displayName || "U").charAt(0).toUpperCase()}
-                  </AvatarFallback>
-                </Avatar>
-                <div className="flex-1">
-                  <p className="text-sm text-muted-foreground">{profile?.email || user.email}</p>
-                </div>
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="displayName">Display Name</Label>
-                <Input
-                  id="displayName"
-                  value={displayName}
-                  onChange={(e) => setDisplayName(e.target.value)}
-                  placeholder="Your display name"
-                  className="bg-input border-border"
-                />
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="avatarUrl">Avatar URL</Label>
-                <Input
-                  id="avatarUrl"
-                  value={avatarUrl}
-                  onChange={(e) => setAvatarUrl(e.target.value)}
-                  placeholder="https://example.com/avatar.png"
-                  className="bg-input border-border"
-                />
+              <div className="mb-4">
+                <p className="text-sm text-muted-foreground">{profile?.email || user.email}</p>
               </div>
 
               <Button onClick={handleSaveProfile} disabled={saving} className="gap-2">
