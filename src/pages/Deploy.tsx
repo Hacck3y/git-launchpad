@@ -120,6 +120,13 @@ const Deploy = () => {
       });
       setDetectedStack(result.detected_stack);
       setDeployConfig(result.deploy_config);
+
+      // Pre-populate env vars from analysis
+      if (result.required_env_vars && result.required_env_vars.length > 0) {
+        setEnvVars(result.required_env_vars.map((key: string) => ({ key, value: "" })));
+        setSkipEnvVars(false);
+      }
+
       toast.success("AI analyzed your repo successfully!");
     } catch (err: any) {
       setUrlError(err.message || "Failed to analyze repository");
@@ -480,7 +487,14 @@ const Deploy = () => {
 
               {/* Env vars toggle */}
               <div className="flex items-center justify-between mb-4 rounded-lg border border-border bg-card/50 p-4">
-                <span className="text-sm">This repo needs no env vars</span>
+                <div>
+                  <span className="text-sm">This repo needs no env vars</span>
+                  {!skipEnvVars && envVars.some(v => v.key) && (
+                    <p className="text-xs text-muted-foreground mt-1">
+                      {envVars.filter(v => v.key).length} variable(s) detected — fill in their values
+                    </p>
+                  )}
+                </div>
                 <Switch checked={skipEnvVars} onCheckedChange={setSkipEnvVars} />
               </div>
 

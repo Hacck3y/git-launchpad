@@ -6,78 +6,56 @@ const corsHeaders = {
     "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
 
-// Config files we want to read for AI analysis
 const CONFIG_FILES = [
-  "package.json",
-  "requirements.txt",
-  "Pipfile",
-  "pyproject.toml",
-  "Dockerfile",
-  "docker-compose.yml",
-  "docker-compose.yaml",
-  "Cargo.toml",
-  "go.mod",
-  "Makefile",
-  "Procfile",
-  ".env.example",
-  "tsconfig.json",
-  "vite.config.ts",
-  "vite.config.js",
-  "next.config.js",
-  "next.config.mjs",
-  "nuxt.config.ts",
-  "angular.json",
-  "manage.py",
-  "app.py",
-  "main.py",
-  "server.js",
-  "server.ts",
-  "index.js",
-  "index.ts",
-  "pom.xml",
-  "build.gradle",
-  "composer.json",
-  "Gemfile",
+  "package.json", "requirements.txt", "Pipfile", "pyproject.toml",
+  "Dockerfile", "docker-compose.yml", "docker-compose.yaml",
+  "Cargo.toml", "go.mod", "Makefile", "Procfile",
+  ".env.example", ".env.sample", ".env.template",
+  "tsconfig.json", "vite.config.ts", "vite.config.js",
+  "next.config.js", "next.config.mjs", "nuxt.config.ts", "angular.json",
+  "manage.py", "app.py", "main.py", "server.js", "server.ts",
+  "index.js", "index.ts", "pom.xml", "build.gradle", "composer.json", "Gemfile",
 ];
+
+const ENV_FILES = [".env.example", ".env.sample", ".env.template", ".env.development", ".env.local.example"];
 
 async function fetchGitHubTree(owner: string, repo: string): Promise<string[]> {
   const res = await fetch(
     `https://api.github.com/repos/${owner}/${repo}/git/trees/HEAD?recursive=1`,
-    {
-      headers: { Accept: "application/vnd.github.v3+json", "User-Agent": "Lovable-Deploy" },
-    }
+    { headers: { Accept: "application/vnd.github.v3+json", "User-Agent": "Lovable-Deploy" } }
   );
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`GitHub tree API error ${res.status}: ${text}`);
-  }
+  if (!res.ok) throw new Error(`GitHub tree API error ${res.status}: ${await res.text()}`);
   const data = await res.json();
-  return (data.tree || [])
-    .filter((t: any) => t.type === "blob")
-    .map((t: any) => t.path as string);
+  return (data.tree || []).filter((t: any) => t.type === "blob").map((t: any) => t.path as string);
 }
 
 async function fetchFileContent(owner: string, repo: string, path: string): Promise<string | null> {
   try {
     const res = await fetch(
       `https://api.github.com/repos/${owner}/${repo}/contents/${path}`,
-      {
-        headers: { Accept: "application/vnd.github.v3.raw", "User-Agent": "Lovable-Deploy" },
-      }
+      { headers: { Accept: "application/vnd.github.v3.raw", "User-Agent": "Lovable-Deploy" } }
     );
     if (!res.ok) return null;
     const text = await res.text();
-    // Truncate large files
     return text.length > 5000 ? text.slice(0, 5000) + "\n... (truncated)" : text;
-  } catch {
-    return null;
-  }
+  } catch { return null; }
 }
 
 function parseRepoUrl(url: string): { owner: string; repo: string } {
   const match = url.match(/github\.com\/([\w.-]+)\/([\w.-]+)/);
   if (!match) throw new Error("Invalid GitHub URL");
   return { owner: match[1], repo: match[2].replace(/\.git$/, "") };
+}
+
+function extractEnvVarsFromContent(content: string): string[] {
+  const vars: string[] = [];
+  for (const line of content.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const match = trimmed.match(/^([A-Z][A-Z0-9_]*)=/);
+    if (match) vars.push(match[1]);
+  }
+  return vars;
 }
 
 serve(async (req) => {
@@ -93,28 +71,41 @@ serve(async (req) => {
     if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY is not configured");
 
     const { owner, repo } = parseRepoUrl(repo_url);
-
-    // 1. Fetch file tree
     const allFiles = await fetchGitHubTree(owner, repo);
 
-    // 2. Fetch relevant config files
+    // Fetch config files
     const configFilesToFetch = allFiles.filter((f) => {
       const basename = f.split("/").pop() || "";
       return CONFIG_FILES.includes(basename) || CONFIG_FILES.includes(f);
-    });
+    }).slice(0, 15);
 
-    // Limit to 15 config files max
-    const filesToRead = configFilesToFetch.slice(0, 15);
+    // Also find env example files
+    const envFilesToFetch = allFiles.filter((f) => {
+      const basename = f.split("/").pop() || "";
+      return ENV_FILES.includes(basename);
+    }).slice(0, 5);
+
+    const allFilesToFetch = [...new Set([...configFilesToFetch, ...envFilesToFetch])];
+
     const fileContents: Record<string, string> = {};
-    
     await Promise.all(
-      filesToRead.map(async (path) => {
+      allFilesToFetch.map(async (path) => {
         const content = await fetchFileContent(owner, repo, path);
         if (content) fileContents[path] = content;
       })
     );
 
-    // 3. Build prompt
+    // Extract env vars from env example files
+    const detectedEnvVars: string[] = [];
+    for (const [path, content] of Object.entries(fileContents)) {
+      const basename = path.split("/").pop() || "";
+      if (ENV_FILES.includes(basename)) {
+        detectedEnvVars.push(...extractEnvVarsFromContent(content));
+      }
+    }
+    const uniqueEnvVars = [...new Set(detectedEnvVars)];
+
+    // Build AI prompt
     const treeStr = allFiles.slice(0, 200).join("\n");
     const configStr = Object.entries(fileContents)
       .map(([path, content]) => `--- ${path} ---\n${content}`)
@@ -130,7 +121,8 @@ You MUST respond with ONLY valid JSON (no markdown, no explanation) in this exac
   "build_cmd": "string (command to build the project, empty string if none needed)",
   "start_cmd": "string (command to start the application)",
   "port": number (the port the app listens on),
-  "dockerfile_content": "string (a complete Dockerfile to build and run this project)"
+  "dockerfile_content": "string (a complete Dockerfile to build and run this project)",
+  "required_env_vars": ["array of env var names that MUST be set for the app to work (e.g. API keys, database URLs, secrets). Include vars from .env.example files and any referenced in code. Do NOT include optional or cosmetic vars."]
 }
 
 Rules for the Dockerfile:
@@ -150,9 +142,10 @@ File tree (top 200 files):
 ${treeStr}
 
 Config file contents:
-${configStr}`;
+${configStr}
 
-    // 4. Call Lovable AI
+${uniqueEnvVars.length > 0 ? `\nDetected env vars from .env.example files: ${uniqueEnvVars.join(", ")}` : ""}`;
+
     const aiResponse = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
       method: "POST",
       headers: {
@@ -171,14 +164,12 @@ ${configStr}`;
     if (!aiResponse.ok) {
       if (aiResponse.status === 429) {
         return new Response(JSON.stringify({ error: "Rate limit exceeded. Please try again later." }), {
-          status: 429,
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
+          status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
       if (aiResponse.status === 402) {
         return new Response(JSON.stringify({ error: "AI credits exhausted. Please add funds." }), {
-          status: 402,
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
+          status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
       const errText = await aiResponse.text();
@@ -189,7 +180,6 @@ ${configStr}`;
     const aiData = await aiResponse.json();
     const rawContent = aiData.choices?.[0]?.message?.content || "";
 
-    // Parse AI response - strip markdown code fences if present
     let deployConfig;
     try {
       const cleaned = rawContent.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
@@ -199,7 +189,11 @@ ${configStr}`;
       throw new Error("AI returned invalid deployment config");
     }
 
-    // 5. Also return repo metadata
+    // Merge env vars: AI-detected + file-detected
+    const aiEnvVars: string[] = deployConfig.required_env_vars || [];
+    const allEnvVars = [...new Set([...uniqueEnvVars, ...aiEnvVars])];
+
+    // Fetch repo metadata
     const repoRes = await fetch(`https://api.github.com/repos/${owner}/${repo}`, {
       headers: { Accept: "application/vnd.github.v3+json", "User-Agent": "Lovable-Deploy" },
     });
@@ -207,16 +201,13 @@ ${configStr}`;
     if (repoRes.ok) {
       const r = await repoRes.json();
       repoMeta = {
-        name: r.name,
-        fullName: r.full_name,
+        name: r.name, fullName: r.full_name,
         description: r.description || "",
         language: r.language || deployConfig.language,
-        stars: r.stargazers_count,
-        defaultBranch: r.default_branch,
+        stars: r.stargazers_count, defaultBranch: r.default_branch,
       };
     }
 
-    // Detected stack from AI
     const detectedStack = [deployConfig.language, deployConfig.framework].filter(Boolean);
 
     return new Response(
@@ -225,19 +216,15 @@ ${configStr}`;
         deploy_config: deployConfig,
         detected_stack: detectedStack,
         files_analyzed: Object.keys(fileContents),
+        required_env_vars: allEnvVars,
       }),
-      {
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      }
+      { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   } catch (e) {
     console.error("analyze-repo error:", e);
     return new Response(
       JSON.stringify({ error: e instanceof Error ? e.message : "Unknown error" }),
-      {
-        status: 500,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      }
+      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   }
 });
