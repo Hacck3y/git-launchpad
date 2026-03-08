@@ -652,6 +652,37 @@ const Deploy = () => {
                   <Copy className="h-4 w-4" />
                   Share this preview
                 </Button>
+                <Button
+                  variant="outline"
+                  onClick={async () => {
+                    if (!deployId) return;
+                    setDestroying(true);
+                    try {
+                      await killDeployment(deployId);
+                      if (user) {
+                        await supabase
+                          .from("deployments")
+                          .update({ status: "killed" } as any)
+                          .eq("deploy_id", deployId);
+                      }
+                      toast.success("Preview destroyed successfully");
+                      setCountdown(0);
+                    } catch (err: any) {
+                      toast.error("Failed to destroy: " + err.message);
+                    } finally {
+                      setDestroying(false);
+                    }
+                  }}
+                  disabled={destroying || countdown === 0}
+                  className="gap-2 border-destructive/50 text-destructive hover:bg-destructive/10 hover:border-destructive"
+                >
+                  {destroying ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Trash2 className="h-4 w-4" />
+                  )}
+                  Destroy Preview
+                </Button>
                 <Link to="/deploy">
                   <Button variant="ghost" className="gap-2 text-muted-foreground hover:text-foreground">
                     <Rocket className="h-4 w-4" />
