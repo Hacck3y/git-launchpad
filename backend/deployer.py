@@ -3,7 +3,9 @@ deployer.py — Controls how user repos are deployed inside Docker containers.
 Accepts AI-generated deploy_config with custom Dockerfile and commands.
 Always uses Docker. Writes .env file from user-provided env vars.
 Detects stalled/failed builds with timeouts.
-Auto-retries with AI-powered error fixing (up to 2 retries).
+Auto-retries with AI-powered error fixing (up to 3 retries).
+Supports pnpm/yarn/npm monorepos with workspace dependencies.
+Uses --network host so containers can access host services (postgres, redis, etc.) via localhost.
 """
 import os
 import subprocess
@@ -29,12 +31,12 @@ _next_port = PORT_START
 
 # Timeouts (seconds)
 CLONE_TIMEOUT = 120
-BUILD_TIMEOUT = 600
+BUILD_TIMEOUT = 900  # 15 min for complex monorepos
 RUN_TIMEOUT = 30
 HEALTH_CHECK_TIMEOUT = 30
 
 # Max AI fix retries
-MAX_FIX_RETRIES = 2
+MAX_FIX_RETRIES = 3
 
 
 def _allocate_port() -> int:
@@ -54,6 +56,37 @@ RUN npm install
 COPY . .
 {env_file_copy}
 RUN if grep -q '"build"' package.json; then npm run build; fi
+EXPOSE {port}
+CMD {start_cmd}
+""",
+    "pnpm": """FROM node:20-slim
+RUN corepack enable && corepack prepare pnpm@latest --activate
+RUN apt-get update && apt-get install -y python3 make g++ git && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+COPY . .
+{env_file_copy}
+RUN pnpm install --no-frozen-lockfile
+RUN pnpm run build || true
+EXPOSE {port}
+CMD {start_cmd}
+""",
+    "pnpm_workspace": """FROM node:20-slim
+RUN corepack enable && corepack prepare pnpm@latest --activate
+RUN apt-get update && apt-get install -y python3 make g++ git && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+COPY . .
+{env_file_copy}
+RUN pnpm install --no-frozen-lockfile
+RUN pnpm run build || true
+EXPOSE {port}
+CMD {start_cmd}
+""",
+    "yarn": """FROM node:20-slim
+WORKDIR /app
+COPY . .
+{env_file_copy}
+RUN yarn install --network-timeout 600000
+RUN yarn build || true
 EXPOSE {port}
 CMD {start_cmd}
 """,
@@ -77,20 +110,52 @@ CMD {start_cmd}
 }
 
 
+def _detect_package_manager(repo_dir: str) -> str:
+    """Detect which package manager the project uses."""
+    if os.path.exists(os.path.join(repo_dir, "pnpm-lock.yaml")):
+        return "pnpm"
+    if os.path.exists(os.path.join(repo_dir, "yarn.lock")):
+        return "yarn"
+    if os.path.exists(os.path.join(repo_dir, "bun.lockb")) or os.path.exists(os.path.join(repo_dir, "bun.lock")):
+        return "bun"
+    return "npm"
+
+
+def _is_monorepo(repo_dir: str) -> bool:
+    """Check if the project is a monorepo with workspaces."""
+    # Check pnpm-workspace.yaml
+    if os.path.exists(os.path.join(repo_dir, "pnpm-workspace.yaml")):
+        return True
+    # Check package.json workspaces field
+    pkg_path = os.path.join(repo_dir, "package.json")
+    if os.path.exists(pkg_path):
+        try:
+            with open(pkg_path, "r") as f:
+                pkg = json.load(f)
+            if "workspaces" in pkg:
+                return True
+        except Exception:
+            pass
+    return False
+
+
 def _call_ai_fix(error_log: str, dockerfile_content: str, repo_files: List[str],
-                  language: str, framework: str, start_cmd: str, port: int, attempt: int) -> Optional[Dict]:
+                  language: str, framework: str, start_cmd: str, port: int, attempt: int,
+                  package_manager: str = "npm", is_monorepo: bool = False) -> Optional[Dict]:
     """Call the fix-deploy-error edge function to get AI-powered fixes."""
     try:
         url = f"{SUPABASE_URL}/functions/v1/fix-deploy-error"
         payload = json.dumps({
-            "error_log": error_log[:3000],
+            "error_log": error_log[:4000],
             "dockerfile_content": dockerfile_content,
-            "repo_files": repo_files[:100],
+            "repo_files": repo_files[:150],
             "language": language or "unknown",
             "framework": framework or "unknown",
             "start_cmd": start_cmd or "unknown",
             "port": port,
             "attempt": attempt,
+            "package_manager": package_manager,
+            "is_monorepo": is_monorepo,
         }).encode("utf-8")
 
         req = urllib.request.Request(
@@ -102,7 +167,7 @@ def _call_ai_fix(error_log: str, dockerfile_content: str, repo_files: List[str],
             },
             method="POST",
         )
-        with urllib.request.urlopen(req, timeout=60) as resp:
+        with urllib.request.urlopen(req, timeout=90) as resp:
             data = json.loads(resp.read().decode())
             return data
     except Exception as e:
@@ -185,6 +250,17 @@ class Deployer:
                 return f.read()
         return ""
 
+    def _read_package_json(self, repo_dir: str) -> Dict:
+        """Read and parse package.json."""
+        pkg_path = os.path.join(repo_dir, "package.json")
+        if os.path.exists(pkg_path):
+            try:
+                with open(pkg_path, "r") as f:
+                    return json.load(f)
+            except Exception:
+                pass
+        return {}
+
     def _check_container_health(self, container_name: str) -> tuple:
         for attempt in range(6):
             time.sleep(5)
@@ -202,7 +278,7 @@ class Deployer:
                         capture_output=True, timeout=10,
                     )
                     error_log = logs.stderr.decode() or logs.stdout.decode()
-                    return False, error_log[:1000]
+                    return False, error_log[:1500]
             except Exception:
                 continue
         return False, "Container health check timed out"
@@ -239,13 +315,14 @@ class Deployer:
         )
 
         if build_result.returncode != 0:
-            error_output = build_result.stderr.decode()[-1000:]
+            error_output = build_result.stderr.decode()[-2000:]
             return False, f"BUILD_ERROR: {error_output}"
 
         self._update_status(deploy_id, "building" if attempt == 0 else "ai_fixing")
         time.sleep(1)
 
-        # Run
+        # Run with --network host so containers can access host services (postgres, redis, mysql)
+        # via localhost:<port>
         self._update_status(deploy_id, "starting" if attempt == 0 else "ai_retrying")
         env_flags = []
         for k, v in env_vars.items():
@@ -255,10 +332,12 @@ class Deployer:
             [
                 "docker", "run", "-d",
                 "--name", container_name,
-                "-p", f"{port}:{app_port}",
-                "--memory", "256m",
-                "--cpus", "0.5",
+                "--network", "host",
+                "--memory", "512m",
+                "--cpus", "1.0",
                 *env_flags,
+                "-e", f"PORT={app_port}",
+                "-e", f"HOST=0.0.0.0",
                 image_name,
             ],
             capture_output=True,
@@ -277,8 +356,8 @@ class Deployer:
             self._cleanup_container(container_name)
             return False, f"CRASH_ERROR: {error_log}"
 
-        # Success!
-        preview_url = f"http://{HOST_IP}:{port}"
+        # Success! With --network host, the app binds directly to host port
+        preview_url = f"http://{HOST_IP}:{app_port}"
         self._update_status(
             deploy_id, "live",
             container_id=container_id,
@@ -349,14 +428,39 @@ class Deployer:
             # Write .env file
             self._write_env_file(tmp_dir, env_vars)
 
-            # --- Step 2: Detect / use AI config ---
+            # --- Step 2: Detect project type ---
             self._update_status(deploy_id, "detecting")
+            package_manager = _detect_package_manager(tmp_dir)
+            monorepo = _is_monorepo(tmp_dir)
+            pkg_json = self._read_package_json(tmp_dir)
+
             dockerfile_content = None
             app_port = 3000
 
             if deploy_config:
                 dockerfile_content = deploy_config.get("dockerfile_content")
                 app_port = deploy_config.get("port", 3000)
+
+            # For pnpm monorepos, override the AI-generated Dockerfile with our proven template
+            if package_manager == "pnpm" and monorepo and (not dockerfile_content or "npm install" in (dockerfile_content or "")):
+                start_cmd_str = deploy_config.get("start_cmd", "pnpm start") if deploy_config else "pnpm start"
+                env_file_copy = "COPY .env .env" if env_vars else ""
+                def format_cmd(cmd: str) -> str:
+                    parts = cmd.split()
+                    return "[" + ", ".join(f'"{p}"' for p in parts) + "]"
+                dockerfile_content = DEFAULT_DOCKERFILES["pnpm_workspace"].format(
+                    port=app_port, start_cmd=format_cmd(start_cmd_str), env_file_copy=env_file_copy,
+                )
+                self._add_fix_log(deploy_id, f"Detected pnpm monorepo — using workspace-aware Dockerfile")
+            elif package_manager == "pnpm" and not dockerfile_content:
+                start_cmd_str = deploy_config.get("start_cmd", "pnpm start") if deploy_config else "pnpm start"
+                env_file_copy = "COPY .env .env" if env_vars else ""
+                def format_cmd(cmd: str) -> str:
+                    parts = cmd.split()
+                    return "[" + ", ".join(f'"{p}"' for p in parts) + "]"
+                dockerfile_content = DEFAULT_DOCKERFILES["pnpm"].format(
+                    port=app_port, start_cmd=format_cmd(start_cmd_str), env_file_copy=env_file_copy,
+                )
 
             if not dockerfile_content:
                 dockerfile_content = self._detect_dockerfile(tmp_dir, deploy_config, bool(env_vars))
@@ -408,6 +512,8 @@ class Deployer:
                     start_cmd=start_cmd,
                     port=app_port,
                     attempt=attempt + 1,
+                    package_manager=package_manager,
+                    is_monorepo=monorepo,
                 )
 
                 if not fix_config or "error" in fix_config:
@@ -430,7 +536,7 @@ class Deployer:
                 self._add_fix_log(deploy_id, f"Retrying build with AI fixes...")
 
         except subprocess.TimeoutExpired:
-            self._update_status(deploy_id, "error", error="Build timed out (exceeded 10 minute limit)")
+            self._update_status(deploy_id, "error", error="Build timed out (exceeded 15 minute limit)")
         except subprocess.CalledProcessError as e:
             error_msg = e.stderr.decode() if e.stderr else str(e)
             self._update_status(deploy_id, "error", error=error_msg[:500])
@@ -450,11 +556,25 @@ class Deployer:
             parts = cmd.split()
             return "[" + ", ".join(f'"{p}"' for p in parts) + "]"
 
+        pkg_manager = _detect_package_manager(repo_dir)
+
         if os.path.exists(os.path.join(repo_dir, "package.json")):
-            cmd = start_cmd or "npm start"
-            return DEFAULT_DOCKERFILES["node"].format(
-                port=port, start_cmd=format_cmd(cmd), env_file_copy=env_file_copy,
-            )
+            if pkg_manager == "pnpm":
+                cmd = start_cmd or "pnpm start"
+                template = "pnpm_workspace" if _is_monorepo(repo_dir) else "pnpm"
+                return DEFAULT_DOCKERFILES[template].format(
+                    port=port, start_cmd=format_cmd(cmd), env_file_copy=env_file_copy,
+                )
+            elif pkg_manager == "yarn":
+                cmd = start_cmd or "yarn start"
+                return DEFAULT_DOCKERFILES["yarn"].format(
+                    port=port, start_cmd=format_cmd(cmd), env_file_copy=env_file_copy,
+                )
+            else:
+                cmd = start_cmd or "npm start"
+                return DEFAULT_DOCKERFILES["node"].format(
+                    port=port, start_cmd=format_cmd(cmd), env_file_copy=env_file_copy,
+                )
 
         if os.path.exists(os.path.join(repo_dir, "requirements.txt")):
             cmd = start_cmd or "python app.py"
