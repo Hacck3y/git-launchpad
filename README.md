@@ -60,6 +60,22 @@ This project is built with:
 - shadcn-ui
 - Tailwind CSS
 
+## API Backend
+
+The app connects to a deployment API at `http://157.245.109.239:3000`.
+
+> **⚠️ Production Note:** The API currently uses plain HTTP. For production, you should:
+> 1. Set up a domain pointing to your VPS (e.g. `api.gitpreview.dev`)
+> 2. Install Nginx as a reverse proxy with Let's Encrypt SSL:
+>    ```sh
+>    sudo apt install nginx certbot python3-certbot-nginx
+>    # Configure Nginx to proxy_pass to localhost:3000
+>    sudo certbot --nginx -d api.gitpreview.dev
+>    ```
+> 3. Update `BASE_URL` in `src/lib/api.ts` to `https://api.gitpreview.dev`
+>
+> This is required because browsers block mixed content (HTTP requests from HTTPS pages).
+
 ## How can I deploy this project?
 
 Simply open [Lovable](https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID) and click on Share -> Publish.
