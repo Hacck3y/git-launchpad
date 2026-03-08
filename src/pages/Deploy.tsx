@@ -24,6 +24,7 @@ import { Progress } from "@/components/ui/progress";
 import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
 import Navbar from "@/components/Navbar";
+import { deployRepo, getDeployment } from "@/lib/api";
 
 // Types
 interface RepoInfo {
@@ -75,8 +76,10 @@ const Deploy = () => {
   const [detectedStack, setDetectedStack] = useState<string[]>([]);
   const [deploySteps, setDeploySteps] = useState<DeployStep[]>(INITIAL_STEPS);
   const [deployProgress, setDeployProgress] = useState(0);
-  const [previewUrl] = useState("https://preview-k8x2m.gitpreview.dev");
+  const [previewUrl, setPreviewUrl] = useState("");
   const [countdown, setCountdown] = useState(900); // 15 min
+  const [deployId, setDeployId] = useState<string | null>(null);
+  const [deploying, setDeploying] = useState(false);
 
   const validateUrl = (url: string) => {
     const githubRegex = /^https?:\/\/github\.com\/[\w.-]+\/[\w.-]+\/?$/;
@@ -117,41 +120,95 @@ const Deploy = () => {
     }
   }, []);
 
-  // Deploy simulation
-  useEffect(() => {
-    if (step !== 3) return;
+  // Start deploy API call
+  const startDeploy = async () => {
+    setDeploying(true);
+    setDeploySteps(INITIAL_STEPS);
+    setDeployProgress(0);
+    setStep(3);
 
-    let currentStep = 0;
-    const runStep = () => {
-      if (currentStep >= INITIAL_STEPS.length) {
-        setTimeout(() => setStep(4), 600);
-        return;
+    try {
+      const envVarsObj: Record<string, string> = {};
+      if (!skipEnvVars) {
+        envVars.forEach((ev) => {
+          if (ev.key.trim()) envVarsObj[ev.key.trim()] = ev.value;
+        });
       }
+      const result = await deployRepo({ repo_url: repoUrl, env_vars: envVarsObj });
+      if (result.deploy_id || result.deployment_id || result.id) {
+        setDeployId(result.deploy_id || result.deployment_id || result.id);
+      } else {
+        toast.error("Deploy failed: " + (result.error || "Unknown error"));
+        setDeploying(false);
+      }
+    } catch (err: any) {
+      toast.error("Deploy request failed: " + err.message);
+      setDeploying(false);
+    }
+  };
 
-      setDeploySteps((prev) =>
-        prev.map((s, i) => ({
-          ...s,
-          status: i === currentStep ? "running" : i < currentStep ? "done" : "pending",
-        }))
-      );
-      setDeployProgress(((currentStep + 0.5) / INITIAL_STEPS.length) * 100);
+  // Poll deployment status
+  useEffect(() => {
+    if (!deployId || step !== 3) return;
 
-      const delay = 1200 + Math.random() * 1500;
-      setTimeout(() => {
-        setDeploySteps((prev) =>
-          prev.map((s, i) => ({
-            ...s,
-            status: i <= currentStep ? "done" : s.status,
-          }))
-        );
-        setDeployProgress(((currentStep + 1) / INITIAL_STEPS.length) * 100);
-        currentStep++;
-        setTimeout(runStep, 300);
-      }, delay);
-    };
+    const poll = setInterval(async () => {
+      try {
+        const data = await getDeployment(deployId);
+        const status = data.status;
 
-    runStep();
-  }, [step]);
+        // Map API status to deploy steps
+        const statusMap: Record<string, number> = {
+          cloning: 0,
+          detecting: 1,
+          installing: 2,
+          building: 3,
+          starting: 4,
+          live: 5,
+        };
+
+        const stepIndex = statusMap[status] ?? -1;
+
+        if (stepIndex >= 0) {
+          setDeploySteps((prev) =>
+            prev.map((s, i) => ({
+              ...s,
+              status: i < stepIndex ? "done" : i === stepIndex ? (status === "live" ? "done" : "running") : "pending",
+            }))
+          );
+          setDeployProgress(Math.min((stepIndex / INITIAL_STEPS.length) * 100, 100));
+        }
+
+        if (status === "live" || status === "running" || status === "ready") {
+          clearInterval(poll);
+          setDeploySteps((prev) => prev.map((s) => ({ ...s, status: "done" as const })));
+          setDeployProgress(100);
+          setPreviewUrl(data.preview_url || data.url || "");
+
+          // Calculate countdown from expires_at
+          if (data.expires_at) {
+            const expiresAt = new Date(data.expires_at).getTime();
+            const remaining = Math.max(0, Math.floor((expiresAt - Date.now()) / 1000));
+            setCountdown(remaining);
+          }
+
+          setTimeout(() => {
+            setStep(4);
+            setDeploying(false);
+          }, 600);
+        }
+
+        if (status === "error" || status === "failed") {
+          clearInterval(poll);
+          toast.error("Deployment failed: " + (data.error || "Unknown error"));
+          setDeploying(false);
+        }
+      } catch {
+        // Ignore transient fetch errors, keep polling
+      }
+    }, 3000);
+
+    return () => clearInterval(poll);
+  }, [deployId, step]);
 
   // Countdown timer for live step
   useEffect(() => {
@@ -388,7 +445,7 @@ const Deploy = () => {
                   <ArrowLeft className="h-4 w-4" /> Back
                 </Button>
                 <Button
-                  onClick={() => setStep(3)}
+                  onClick={startDeploy}
                   className="gap-2 bg-primary text-primary-foreground hover:bg-primary/90 glow-cyan-sm"
                 >
                   <Rocket className="h-4 w-4" />
