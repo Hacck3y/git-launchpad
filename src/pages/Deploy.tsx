@@ -212,6 +212,24 @@ const Deploy = () => {
         const status = data.status;
         setPollFailCount(0);
 
+        // Track status changes for stall detection
+        if (status !== lastStatus) {
+          setLastStatus(status);
+          setLastStatusChange(Date.now());
+        } else {
+          // If stuck on same status for 90s, report as failed
+          const stalledMs = Date.now() - lastStatusChange;
+          if (stalledMs > 90000 && status !== "live" && status !== "ready") {
+            clearInterval(poll);
+            const errMsg = `Deployment stalled on "${status}" for over 90 seconds. The build may have failed silently.`;
+            setDeployError(errMsg);
+            setDeployLogs(prev => [...prev, `✗ ${errMsg}`]);
+            toast.error("Deployment appears stalled");
+            setDeploying(false);
+            return;
+          }
+        }
+
         // Add log for status changes
         setDeployLogs(prev => {
           const lastLog = prev[prev.length - 1];
