@@ -140,6 +140,7 @@ const Deploy = () => {
       } else {
         toast.error("Deploy failed: " + (result.error || "Unknown error"));
         setDeploying(false);
+        setStep(2);
       }
     } catch (err: any) {
       toast.error("Deploy request failed: " + err.message);
