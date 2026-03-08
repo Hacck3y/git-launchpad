@@ -393,25 +393,31 @@ class Deployer:
             print(f"[DOCKER] Failed to remove image {image_name}: {e}")
 
     def _build_image(self, deploy_id: str, tmp_dir: str, image_name: str) -> tuple:
-        """Build a Docker image using docker-py. Returns (success, error_log)."""
+        """Build a Docker image using docker-py with real-time log streaming. Returns (success, error_log)."""
         try:
-            print(f"[DOCKER] Building image {image_name} from {tmp_dir}")
-            image, build_logs = self.docker.images.build(
+            self._emit_log(deploy_id, f"▶ Building image {image_name}...")
+            # Use low-level API for streaming build output
+            resp = self.docker.api.build(
                 path=tmp_dir,
                 tag=image_name,
-                rm=True,       # Remove intermediate containers
-                forcerm=True,  # Force removal even on failure
+                rm=True,
+                forcerm=True,
                 timeout=BUILD_TIMEOUT,
+                decode=True,  # Auto-decode JSON chunks
             )
-            # Stream build logs for debugging
-            for chunk in build_logs:
+            for chunk in resp:
                 if "stream" in chunk:
-                    line = chunk["stream"].strip()
-                    if line:
+                    line = chunk["stream"].rstrip("\n")
+                    if line.strip():
+                        self._emit_log(deploy_id, line)
                         print(f"[BUILD] {line}")
                 elif "error" in chunk:
-                    return False, f"BUILD_ERROR: {chunk['error']}"
-            print(f"[DOCKER] Image built successfully: {image.id[:12]}")
+                    error_msg = chunk["error"].strip()
+                    self._emit_log(deploy_id, f"✗ {error_msg}")
+                    return False, f"BUILD_ERROR: {error_msg}"
+
+            self._emit_log(deploy_id, "✓ Image built successfully")
+            print(f"[DOCKER] Image built successfully: {image_name}")
             return True, ""
         except BuildError as e:
             error_lines = []
@@ -421,10 +427,13 @@ class Deployer:
                 elif "stream" in chunk:
                     error_lines.append(chunk["stream"])
             error_log = "".join(error_lines)[-2000:]
+            self._emit_log(deploy_id, f"✗ Build failed")
             return False, f"BUILD_ERROR: {error_log}"
         except APIError as e:
+            self._emit_log(deploy_id, f"✗ Docker API error: {str(e)[:200]}")
             return False, f"BUILD_ERROR: Docker API error: {str(e)[:1000]}"
         except Exception as e:
+            self._emit_log(deploy_id, f"✗ Build error: {str(e)[:200]}")
             return False, f"BUILD_ERROR: {str(e)[:1000]}"
 
     def _run_container(self, deploy_id: str, image_name: str, container_name: str,
