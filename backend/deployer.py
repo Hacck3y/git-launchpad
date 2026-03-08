@@ -442,7 +442,7 @@ class Deployer:
         env = {**env_vars, "PORT": str(app_port), "HOST": "0.0.0.0"}
 
         try:
-            print(f"[DOCKER] Starting container {container_name} (port {app_port})")
+            self._emit_log(deploy_id, f"▶ Starting container on port {app_port}...")
             container = self.docker.containers.run(
                 image=image_name,
                 name=container_name,
@@ -451,16 +451,45 @@ class Deployer:
                 mem_limit="512m",
                 nano_cpus=int(1e9),  # 1.0 CPU
                 environment=env,
-                remove=False,  # We manage removal ourselves
+                remove=False,
             )
-            print(f"[DOCKER] Container started: {container.id[:12]}")
+            self._emit_log(deploy_id, f"✓ Container started: {container.short_id}")
+
+            # Start background thread to stream container stdout/stderr
+            self._start_runtime_log_stream(deploy_id, container_name)
+
             return container.id, ""
         except ContainerError as e:
+            self._emit_log(deploy_id, f"✗ Container error: {str(e)[:200]}")
             return None, f"RUN_ERROR: Container exited with error: {str(e)[:1000]}"
         except APIError as e:
+            self._emit_log(deploy_id, f"✗ Docker API error: {str(e)[:200]}")
             return None, f"RUN_ERROR: Docker API error: {str(e)[:1000]}"
         except Exception as e:
+            self._emit_log(deploy_id, f"✗ Run error: {str(e)[:200]}")
             return None, f"RUN_ERROR: {str(e)[:1000]}"
+
+    def _start_runtime_log_stream(self, deploy_id: str, container_name: str):
+        """Stream runtime logs from a running container in a background thread."""
+        def _stream():
+            try:
+                container = self.docker.containers.get(container_name)
+                for line in container.logs(stream=True, follow=True, timestamps=False):
+                    text = line.decode("utf-8", errors="replace").rstrip("\n")
+                    if text.strip():
+                        self._emit_log(deploy_id, f"  {text}")
+                    # Stop if deployment is no longer live
+                    with self._lock:
+                        info = self.deployments.get(deploy_id, {})
+                        if info.get("status") in ("killed", "error", "expired"):
+                            break
+            except NotFound:
+                pass
+            except Exception as e:
+                print(f"[LOG STREAM] Error for {deploy_id}: {e}")
+
+        t = threading.Thread(target=_stream, daemon=True)
+        t.start()
 
     def _build_and_run(self, deploy_id: str, tmp_dir: str, env_vars: Dict[str, str],
                         port: int, app_port: int, attempt: int) -> tuple:
