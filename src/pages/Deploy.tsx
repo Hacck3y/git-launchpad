@@ -372,6 +372,32 @@ const Deploy = () => {
     return () => clearInterval(poll);
   }, [deployId, step]);
 
+  // WebSocket real-time log streaming
+  useEffect(() => {
+    if (!deployId || step !== 3) return;
+
+    const logStream = connectLogStream(
+      deployId,
+      (line) => {
+        setDeployLogs(prev => {
+          // Avoid duplicates
+          if (prev[prev.length - 1] === `📦 ${line}`) return prev;
+          return [...prev, `📦 ${line}`];
+        });
+      },
+      (reason, previewUrl) => {
+        if (reason === "live" && previewUrl) {
+          setDeployLogs(prev => [...prev, `✓ Stream ended: deployment is live`]);
+        }
+      },
+      (err) => {
+        console.warn("[WS] Log stream error:", err);
+        // WebSocket is optional — polling handles the main flow
+      },
+    );
+
+    return () => logStream.close();
+
   // Countdown timer for live step
   useEffect(() => {
     if (step !== 4) return;
