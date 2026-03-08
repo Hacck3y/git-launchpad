@@ -24,7 +24,7 @@ import { Progress } from "@/components/ui/progress";
 import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
 import Navbar from "@/components/Navbar";
-import { deployRepo, getDeployment } from "@/lib/api";
+import { deployRepo, getDeployment, analyzeRepo, type DeployConfig } from "@/lib/api";
 
 // Types
 interface RepoInfo {
@@ -80,6 +80,8 @@ const Deploy = () => {
   const [countdown, setCountdown] = useState(900); // 15 min
   const [deployId, setDeployId] = useState<string | null>(null);
   const [deploying, setDeploying] = useState(false);
+  const [deployConfig, setDeployConfig] = useState<DeployConfig | null>(null);
+  const [analyzing, setAnalyzing] = useState(false);
 
   const validateUrl = (url: string) => {
     const githubRegex = /^https?:\/\/github\.com\/[\w.-]+\/[\w.-]+\/?$/;
@@ -94,24 +96,29 @@ const Deploy = () => {
     }
     setUrlError("");
     setLoadingRepo(true);
+    setAnalyzing(true);
 
-    // Simulate API call
-    await new Promise((r) => setTimeout(r, 800));
-
-    const parts = repoUrl.replace(/\/$/, "").split("/");
-    const owner = parts[parts.length - 2];
-    const repo = parts[parts.length - 1];
-
-    setRepoInfo({
-      name: repo,
-      fullName: `${owner}/${repo}`,
-      description: "A blazing-fast modern web application framework with developer-friendly APIs.",
-      language: "TypeScript",
-      stars: Math.floor(Math.random() * 50000),
-      defaultBranch: "main",
-    });
-    setDetectedStack(["React", "TypeScript", "Vite", "Tailwind CSS"]);
-    setLoadingRepo(false);
+    try {
+      const result = await analyzeRepo(repoUrl);
+      
+      setRepoInfo({
+        name: result.repo.name,
+        fullName: result.repo.fullName,
+        description: result.repo.description,
+        language: result.repo.language,
+        stars: result.repo.stars,
+        defaultBranch: result.repo.defaultBranch,
+      });
+      setDetectedStack(result.detected_stack);
+      setDeployConfig(result.deploy_config);
+      toast.success("AI analyzed your repo successfully!");
+    } catch (err: any) {
+      setUrlError(err.message || "Failed to analyze repository");
+      setRepoInfo(null);
+    } finally {
+      setLoadingRepo(false);
+      setAnalyzing(false);
+    }
   }, [repoUrl]);
 
   useEffect(() => {
@@ -134,7 +141,11 @@ const Deploy = () => {
           if (ev.key.trim()) envVarsObj[ev.key.trim()] = ev.value;
         });
       }
-      const result = await deployRepo({ repo_url: repoUrl, env_vars: envVarsObj });
+      const result = await deployRepo({
+        repo_url: repoUrl,
+        env_vars: envVarsObj,
+        deploy_config: deployConfig || undefined,
+      });
       if (result.deploy_id || result.deployment_id || result.id) {
         setDeployId(result.deploy_id || result.deployment_id || result.id);
       } else {
@@ -318,9 +329,9 @@ const Deploy = () => {
                 </p>
               )}
 
-              {loadingRepo && (
+              {(loadingRepo || analyzing) && (
                 <div className="mt-6 flex items-center gap-2 text-muted-foreground">
-                  <Loader2 className="h-4 w-4 animate-spin" /> Fetching repo info...
+                  <Loader2 className="h-4 w-4 animate-spin" /> {analyzing ? "AI is analyzing your repo..." : "Fetching repo info..."}
                 </div>
               )}
 
