@@ -7,6 +7,9 @@ interface AuthContextType {
   user: User | null;
   profile: { display_name: string | null; avatar_url: string | null; email: string | null } | null;
   loading: boolean;
+  needsOnboarding: boolean;
+  completeOnboarding: () => void;
+  refreshProfile: () => Promise<void>;
   signInWithGoogle: () => Promise<void>;
   signOut: () => Promise<void>;
 }
