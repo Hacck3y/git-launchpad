@@ -1,7 +1,6 @@
 import { Link, useLocation } from "react-router-dom";
 import { Terminal, LogOut, Settings } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import {
   DropdownMenu,
   DropdownMenuContent,
