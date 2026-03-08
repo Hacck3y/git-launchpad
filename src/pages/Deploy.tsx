@@ -149,8 +149,22 @@ const Deploy = () => {
         env_vars: envVarsObj,
         deploy_config: deployConfig || undefined,
       });
-      if (result.deploy_id || result.deployment_id || result.id) {
-        setDeployId(result.deploy_id || result.deployment_id || result.id);
+      const newDeployId = result.deploy_id || result.deployment_id || result.id;
+      if (newDeployId) {
+        setDeployId(newDeployId);
+
+        // Save deployment to database
+        if (user) {
+          await supabase.from("deployments").insert({
+            user_id: user.id,
+            deploy_id: newDeployId,
+            repo_url: repoUrl,
+            repo_name: repoInfo?.fullName || repoUrl.split("/").slice(-2).join("/"),
+            status: "deploying",
+            language: deployConfig?.language || repoInfo?.language || null,
+            framework: deployConfig?.framework || null,
+          } as any);
+        }
       } else {
         toast.error("Deploy failed: " + (result.error || "Unknown error"));
         setDeploying(false);
