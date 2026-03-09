@@ -562,10 +562,12 @@ class Deployer:
         if not replacements:
             return
 
-        # Scan ALL JS/TS/JSON files for hardcoded URIs — not just config dirs.
+        # Scan JS/TS/JSON/Python files for hardcoded URIs — not just config dirs.
         # Many repos hardcode connection strings in app.js, server.js, models/, etc.
+        # NOTE: Elixir .ex/.exs files are EXCLUDED — they use atom-based syntax
+        # that breaks when blindly regex-replacing URI strings.
         config_globs = [
-            "**/*.js", "**/*.ts", "**/*.json",
+            "**/*.js", "**/*.ts", "**/*.json", "**/*.py",
         ]
         # Directories to skip
         skip_dirs = {"node_modules", ".git", "dist", "build", ".next", "coverage", "__pycache__"}
