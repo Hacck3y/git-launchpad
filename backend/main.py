@@ -5,33 +5,95 @@ Includes WebSocket endpoint for real-time log streaming and rate limiting.
 import uuid
 import asyncio
 import time
+import json
+import os
 from collections import defaultdict
+from pathlib import Path
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-from typing import Optional, Dict
+from typing import Optional, Dict, Set
 from deployer import Deployer
 from cleanup import CleanupManager
 import docker as _docker_mod
 
+BLOCKLIST_FILE = Path(__file__).parent / "blocked_ips.json"
+
+
+# ─── IP Blocklist ─────────────────────────────────────────────────
+class IPBlocklist:
+    """Persistent IP blocklist backed by a JSON file."""
+
+    def __init__(self, path: Path = BLOCKLIST_FILE):
+        self._path = path
+        self._blocked: Dict[str, dict] = {}  # ip -> {reason, blocked_at}
+        self._load()
+
+    def _load(self):
+        if self._path.exists():
+            try:
+                self._blocked = json.loads(self._path.read_text())
+            except (json.JSONDecodeError, OSError):
+                self._blocked = {}
+
+    def _save(self):
+        try:
+            self._path.write_text(json.dumps(self._blocked, indent=2))
+        except OSError:
+            pass
+
+    def is_blocked(self, ip: str) -> bool:
+        return ip in self._blocked
+
+    def block(self, ip: str, reason: str = "manual") -> None:
+        self._blocked[ip] = {"reason": reason, "blocked_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+        self._save()
+
+    def unblock(self, ip: str) -> bool:
+        if ip in self._blocked:
+            del self._blocked[ip]
+            self._save()
+            return True
+        return False
+
+    def list_all(self) -> Dict[str, dict]:
+        return dict(self._blocked)
+
+
+ip_blocklist = IPBlocklist()
+
 
 # ─── Rate Limiter ─────────────────────────────────────────────────
 class RateLimiter:
-    """In-memory sliding-window rate limiter per IP."""
+    """In-memory sliding-window rate limiter per IP with auto-ban support."""
 
-    def __init__(self):
+    def __init__(self, auto_ban_threshold: int = 50, auto_ban_window: int = 60):
         self._hits: Dict[str, list[float]] = defaultdict(list)
+        self._violations: Dict[str, list[float]] = defaultdict(list)
+        self._auto_ban_threshold = auto_ban_threshold
+        self._auto_ban_window = auto_ban_window
 
     def is_allowed(self, key: str, max_requests: int, window_seconds: int) -> bool:
         now = time.time()
         cutoff = now - window_seconds
-        # Prune old entries
         self._hits[key] = [t for t in self._hits[key] if t > cutoff]
         if len(self._hits[key]) >= max_requests:
+            # Track violation for auto-ban
+            ip = key.split(":", 1)[-1] if ":" in key else key
+            self._record_violation(ip)
             return False
         self._hits[key].append(now)
         return True
+
+    def _record_violation(self, ip: str):
+        now = time.time()
+        cutoff = now - self._auto_ban_window
+        self._violations[ip] = [t for t in self._violations[ip] if t > cutoff]
+        self._violations[ip].append(now)
+        if len(self._violations[ip]) >= self._auto_ban_threshold:
+            ip_blocklist.block(ip, reason="auto-banned: excessive rate limit violations")
+            self._violations.pop(ip, None)
 
     def remaining(self, key: str, max_requests: int, window_seconds: int) -> int:
         now = time.time()
@@ -40,11 +102,11 @@ class RateLimiter:
         return max(0, max_requests - len(recent))
 
     def cleanup(self, max_age: int = 300):
-        """Remove stale entries older than max_age seconds."""
         now = time.time()
-        stale_keys = [k for k, v in self._hits.items() if not v or v[-1] < now - max_age]
-        for k in stale_keys:
-            del self._hits[k]
+        for store in (self._hits, self._violations):
+            stale = [k for k, v in store.items() if not v or v[-1] < now - max_age]
+            for k in stale:
+                del store[k]
 
 
 rate_limiter = RateLimiter()
@@ -68,11 +130,12 @@ def get_client_ip(request: Request) -> str:
 
 
 def check_rate_limit(request: Request, tier: str) -> None:
-    """Raise 429 if rate limit exceeded."""
+    """Raise 403 if blocked, 429 if rate limit exceeded."""
     ip = get_client_ip(request)
+    if ip_blocklist.is_blocked(ip):
+        raise HTTPException(status_code=403, detail="Access denied.")
     max_req, window = RATE_LIMITS[tier]
     if not rate_limiter.is_allowed(f"{tier}:{ip}", max_req, window):
-        remaining = 0
         raise HTTPException(
             status_code=429,
             detail=f"Rate limit exceeded. Max {max_req} requests per {window}s. Try again later.",
@@ -83,6 +146,15 @@ def check_rate_limit(request: Request, tier: str) -> None:
                 "X-RateLimit-Reset": str(window),
             },
         )
+
+ADMIN_TOKEN = os.environ.get("ADMIN_TOKEN", "changeme-admin-token")
+
+
+def require_admin(request: Request):
+    """Verify admin bearer token."""
+    auth = request.headers.get("authorization", "")
+    if not auth.startswith("Bearer ") or auth[7:] != ADMIN_TOKEN:
+        raise HTTPException(status_code=401, detail="Unauthorized")
 
 
 # ─── App Setup ────────────────────────────────────────────────────
@@ -134,6 +206,36 @@ async def health_check(request: Request):
         "docker": "connected" if docker_ok else "unavailable",
         "active_deployments": len(active) if isinstance(active, (dict, list)) else 0,
     }
+
+
+# ─── Blocklist Admin Endpoints ────────────────────────────────────
+@app.get("/admin/blocklist")
+async def list_blocked_ips(request: Request):
+    """List all blocked IPs. Requires admin token."""
+    require_admin(request)
+    return {"blocked_ips": ip_blocklist.list_all()}
+
+
+class BlockIPRequest(BaseModel):
+    ip: str
+    reason: str = "manual"
+
+
+@app.post("/admin/blocklist")
+async def block_ip(req: BlockIPRequest, request: Request):
+    """Block an IP address. Requires admin token."""
+    require_admin(request)
+    ip_blocklist.block(req.ip, req.reason)
+    return {"status": "blocked", "ip": req.ip, "reason": req.reason}
+
+
+@app.delete("/admin/blocklist/{ip}")
+async def unblock_ip(ip: str, request: Request):
+    """Unblock an IP address. Requires admin token."""
+    require_admin(request)
+    if not ip_blocklist.unblock(ip):
+        raise HTTPException(status_code=404, detail="IP not found in blocklist")
+    return {"status": "unblocked", "ip": ip}
 
 
 # ─── Models ───────────────────────────────────────────────────────
