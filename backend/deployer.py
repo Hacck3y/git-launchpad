@@ -380,7 +380,7 @@ class Deployer:
     def _start_companion_services(self, deploy_id: str, network_name: str,
                                    needed_services: List[str]) -> Dict[str, Dict[str, Any]]:
         """Start companion service containers on the deployment network.
-        Returns a dict of {service_name: {hostname, port, password, container_name, inject_env}}."""
+        Returns a dict of {service_name: {hostname, port, container_name, inject_env}}."""
         service_info = {}
 
         for svc_name in needed_services:
@@ -388,15 +388,11 @@ class Deployer:
             if not svc_config:
                 continue
 
-            container_name = f"svc-{deploy_id}-{svc_name}"
+            container_name = f"gitpreview_{deploy_id}_{svc_name}"
             hostname = svc_name  # Docker network alias
 
-            # Generate random password for services that need one
-            password = secrets.token_urlsafe(16)
-            env = {}
-            if svc_config.get("env"):
-                for key, val in svc_config["env"].items():
-                    env[key] = password if val == "auto" else val
+            # Use static env from SERVICE_MAP (deterministic credentials)
+            env = dict(svc_config.get("env", {}))
 
             try:
                 self._emit_log(deploy_id, f"▶ Starting {svc_name} ({svc_config['image']})...")
@@ -420,21 +416,20 @@ class Deployer:
                 except Exception:
                     pass  # Already connected with alias during run
 
-                # Build inject env vars with actual values
-                inject_env = {}
-                for env_key, env_tpl in svc_config.get("inject", {}).items():
-                    inject_env[env_key] = env_tpl.replace("{hostname}", hostname).replace("{password}", password)
+                # Inject env vars are static — copy directly from SERVICE_MAP
+                inject_env = dict(svc_config.get("inject", {}))
 
                 service_info[svc_name] = {
                     "hostname": hostname,
                     "port": svc_config["port"],
-                    "password": password if env else None,
                     "container_name": container_name,
                     "container_id": container.id,
                     "inject_env": inject_env,
                     "image": svc_config["image"],
+                    "credentials": env,  # pass back the env used (passwords etc.)
                 }
 
+                self._emit_log(deploy_id, f"  ✓ {svc_name} container started")
                 print(f"[DOCKER] Started companion: {container_name} ({svc_config['image']})")
 
             except Exception as e:
