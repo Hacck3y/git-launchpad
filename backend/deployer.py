@@ -606,10 +606,35 @@ class Deployer:
                 except Exception as e:
                     print(f"[PATCH] Error patching {filepath}: {e}")
 
-        # Also try to make the app read from env vars by adding/patching
-        # a .env loader if the app uses dotenv
+        # Also patch .env files that have hardcoded URIs (unquoted values)
+        for env_file in [".env", ".env.example", ".env.sample", ".env.local"]:
+            env_path = os.path.join(repo_dir, env_file)
+            if not os.path.isfile(env_path):
+                continue
+            try:
+                with open(env_path, "r") as f:
+                    content = f.read()
+                original = content
+                for svc_name, repl in replacements.items():
+                    # Match unquoted env values: KEY=mongodb://...
+                    unquoted = re.compile(
+                        r"(=\s*)(mongodb(?:\+srv)?://\S+)" if svc_name == "mongodb" else
+                        r"(=\s*)(mysql://\S+)" if svc_name == "mysql" else
+                        r"(=\s*)(postgres(?:ql)?://\S+)" if svc_name == "postgres" else
+                        r"(=\s*)(redis://\S+)",
+                        re.IGNORECASE,
+                    )
+                    content = unquoted.sub(r"\g<1>" + repl["replacement_uri"], content)
+                if content != original:
+                    with open(env_path, "w") as f:
+                        f.write(content)
+                    self._emit_log(deploy_id, f"  → Patched: {env_file}")
+                    files_patched += 1
+            except Exception as e:
+                print(f"[PATCH] Error patching {env_path}: {e}")
+
         if files_patched > 0:
-            self._emit_log(deploy_id, f"  ✓ Patched {files_patched} config file(s) with companion service URLs")
+            self._emit_log(deploy_id, f"  ✓ Patched {files_patched} file(s) with companion service URLs")
 
     def _cleanup_companion_services(self, deploy_id: str):
         """Stop and remove all companion service containers for a deployment."""
