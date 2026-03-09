@@ -22,7 +22,16 @@ uvicorn main:app --host 0.0.0.0 --port 8000
 | GET | `/api/deploy/{id}` | Get deployment status |
 | DELETE | `/api/deploy/{id}` | Kill and clean up a deployment |
 | WS | `/ws/logs/{id}` | Real-time log streaming (WebSocket) |
+| GET | `/health` | Health check for uptime monitoring |
 | GET | `/docs` | Swagger API documentation (auto-generated) |
+
+### Admin Endpoints (require `ADMIN_TOKEN`)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/admin/blocklist` | List all blocked IPs |
+| POST | `/admin/blocklist` | Block an IP address |
+| DELETE | `/admin/blocklist/{ip}` | Unblock an IP address |
 
 ## Deploy Request Body
 
