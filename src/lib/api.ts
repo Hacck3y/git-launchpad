@@ -21,6 +21,28 @@ interface DeployRequest {
 const BASE_URL = import.meta.env.VITE_API_BASE_URL || "https://157.245.109.239";
 const WS_BASE_URL = BASE_URL.replace(/^https?:\/\//, (m: string) => m.startsWith("https") ? "wss://" : "ws://");
 
+// ─── Retry helper ────────────────────────────────────────────────
+async function fetchWithRetry(
+  url: string,
+  options: RequestInit = {},
+  retries = 2,
+  backoff = 1000,
+): Promise<Response> {
+  for (let i = 0; i <= retries; i++) {
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 30000);
+      const res = await fetch(url, { ...options, signal: controller.signal });
+      clearTimeout(timeout);
+      if (res.ok || res.status < 500 || i === retries) return res;
+    } catch (err: any) {
+      if (i === retries) throw err;
+    }
+    await new Promise((r) => setTimeout(r, backoff * (i + 1)));
+  }
+  throw new Error("Request failed after retries");
+}
+
 export async function analyzeRepo(repoUrl: string): Promise<{
   repo: {
     name: string;
@@ -52,7 +74,7 @@ export async function analyzeRepo(repoUrl: string): Promise<{
   }>;
 }> {
   const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-  const res = await fetch(`${supabaseUrl}/functions/v1/analyze-repo`, {
+  const res = await fetchWithRetry(`${supabaseUrl}/functions/v1/analyze-repo`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -68,7 +90,7 @@ export async function analyzeRepo(repoUrl: string): Promise<{
 }
 
 export async function deployRepo(req: DeployRequest) {
-  const res = await fetch(`${BASE_URL}/api/deploy`, {
+  const res = await fetchWithRetry(`${BASE_URL}/api/deploy`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(req),
@@ -81,7 +103,7 @@ export async function deployRepo(req: DeployRequest) {
 }
 
 export async function getDeployment(deployId: string) {
-  const res = await fetch(`${BASE_URL}/api/deploy/${deployId}`);
+  const res = await fetchWithRetry(`${BASE_URL}/api/deploy/${deployId}`, {}, 1, 2000);
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));
     throw new Error(data?.detail || data?.error || `HTTP ${res.status}`);
@@ -90,7 +112,7 @@ export async function getDeployment(deployId: string) {
 }
 
 export async function killDeployment(deployId: string) {
-  const res = await fetch(`${BASE_URL}/api/deploy/${deployId}`, {
+  const res = await fetchWithRetry(`${BASE_URL}/api/deploy/${deployId}`, {
     method: "DELETE",
   });
   if (!res.ok) {
@@ -119,40 +141,51 @@ export function connectLogStream(
   const url = `${WS_BASE_URL}/ws/logs/${deployId}`;
   let ws: WebSocket | null = null;
   let closed = false;
+  let reconnectAttempts = 0;
+  const maxReconnects = 3;
 
-  try {
-    ws = new WebSocket(url);
-  } catch (e) {
-    onError(`Failed to connect WebSocket: ${e}`);
-    return { close: () => {} };
-  }
-
-  ws.onmessage = (event) => {
+  const connect = () => {
     try {
-      const msg: LogMessage = JSON.parse(event.data);
-      if (msg.type === "log" && msg.line) {
-        onLog(msg.line);
-      } else if (msg.type === "end") {
-        onEnd(msg.reason || "unknown", msg.preview_url);
-      } else if (msg.type === "error") {
-        onError(msg.message || "Unknown error");
+      ws = new WebSocket(url);
+    } catch (e) {
+      onError(`Failed to connect WebSocket: ${e}`);
+      return;
+    }
+
+    ws.onopen = () => {
+      reconnectAttempts = 0;
+    };
+
+    ws.onmessage = (event) => {
+      try {
+        const msg: LogMessage = JSON.parse(event.data);
+        if (msg.type === "log" && msg.line) {
+          onLog(msg.line);
+        } else if (msg.type === "end") {
+          onEnd(msg.reason || "unknown", msg.preview_url);
+        } else if (msg.type === "error") {
+          onError(msg.message || "Unknown error");
+        }
+      } catch {
+        // ignore parse errors
       }
-    } catch {
-      // ignore parse errors
-    }
+    };
+
+    ws.onerror = () => {
+      if (!closed) {
+        // Will attempt reconnect on close
+      }
+    };
+
+    ws.onclose = () => {
+      if (!closed && reconnectAttempts < maxReconnects) {
+        reconnectAttempts++;
+        setTimeout(connect, 2000 * reconnectAttempts);
+      }
+    };
   };
 
-  ws.onerror = () => {
-    if (!closed) {
-      onError("WebSocket connection error");
-    }
-  };
-
-  ws.onclose = () => {
-    if (!closed) {
-      // Silent close is fine — deployment may have ended
-    }
-  };
+  connect();
 
   return {
     close: () => {
