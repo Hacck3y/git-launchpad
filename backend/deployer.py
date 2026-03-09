@@ -561,15 +561,14 @@ class Deployer:
         if not replacements:
             return
 
-        # Scan JS/TS/JSON config files for hardcoded URIs
+        # Scan ALL JS/TS/JSON files for hardcoded URIs — not just config dirs.
+        # Many repos hardcode connection strings in app.js, server.js, models/, etc.
         config_globs = [
-            "config/**/*.js", "config/**/*.ts", "config/**/*.json",
-            "src/config/**/*.js", "src/config/**/*.ts",
-            "src/**/*.config.js", "src/**/*.config.ts",
-            "db.js", "database.js", "db.ts", "database.ts",
-            "*.config.js", "*.config.ts",
-            "config.js", "config.ts",
+            "**/*.js", "**/*.ts", "**/*.json",
         ]
+        # Directories to skip
+        skip_dirs = {"node_modules", ".git", "dist", "build", ".next", "coverage", "__pycache__"}
+
 
         files_patched = 0
         for pattern in config_globs:
