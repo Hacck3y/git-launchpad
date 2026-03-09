@@ -130,11 +130,12 @@ def get_client_ip(request: Request) -> str:
 
 
 def check_rate_limit(request: Request, tier: str) -> None:
-    """Raise 429 if rate limit exceeded."""
+    """Raise 403 if blocked, 429 if rate limit exceeded."""
     ip = get_client_ip(request)
+    if ip_blocklist.is_blocked(ip):
+        raise HTTPException(status_code=403, detail="Access denied.")
     max_req, window = RATE_LIMITS[tier]
     if not rate_limiter.is_allowed(f"{tier}:{ip}", max_req, window):
-        remaining = 0
         raise HTTPException(
             status_code=429,
             detail=f"Rate limit exceeded. Max {max_req} requests per {window}s. Try again later.",
