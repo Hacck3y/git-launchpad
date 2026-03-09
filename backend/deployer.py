@@ -602,7 +602,7 @@ class Deployer:
         if files_patched > 0:
             self._emit_log(deploy_id, f"  ✓ Patched {files_patched} config file(s) with companion service URLs")
 
-
+    def _cleanup_companion_services(self, deploy_id: str):
         """Stop and remove all companion service containers for a deployment."""
         for svc_name in SERVICE_MAP:
             container_name = f"gitpreview_{deploy_id}_{svc_name}"
