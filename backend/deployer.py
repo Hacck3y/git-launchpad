@@ -53,6 +53,10 @@ SERVICE_MAP = {
             "MONGO_URI": "mongodb://mongodb:27017/app",
             "MONGODB_URI": "mongodb://mongodb:27017/app",
             "MONGO_URL": "mongodb://mongodb:27017/app",
+            "MongoURI": "mongodb://mongodb:27017/app",
+            "MONGO_DB_URI": "mongodb://mongodb:27017/app",
+            "DB_URI": "mongodb://mongodb:27017/app",
+            "DATABASE_URL": "mongodb://mongodb:27017/app",
         },
         "health_timeout": 20,
     },
@@ -397,24 +401,23 @@ class Deployer:
             try:
                 self._emit_log(deploy_id, f"▶ Starting {svc_name} ({svc_config['image']})...")
 
-                container = self.docker.containers.run(
+                # Create container first (not started), then connect to network
+                # with proper alias, then start — this is the reliable way to
+                # ensure DNS alias resolution works on the Docker network.
+                container = self.docker.containers.create(
                     image=svc_config["image"],
                     name=container_name,
-                    detach=True,
-                    network=network_name,
+                    environment=env,
                     mem_limit="256m",
                     nano_cpus=int(0.5e9),  # 0.5 CPU
-                    environment=env,
-                    remove=False,
                 )
 
-                # Set network alias so app can reach it by service name
-                try:
-                    network = self.docker.networks.get(network_name)
-                    network.disconnect(container)
-                    network.connect(container, aliases=[svc_name])
-                except Exception:
-                    pass  # Already connected with alias during run
+                # Connect to network with alias BEFORE starting
+                network = self.docker.networks.get(network_name)
+                network.connect(container, aliases=[svc_name])
+
+                # Now start the container
+                container.start()
 
                 # Inject env vars are static — copy directly from SERVICE_MAP
                 inject_env = dict(svc_config.get("inject", {}))
@@ -501,6 +504,103 @@ class Deployer:
             else:
                 self._emit_log(deploy_id, f"  ⚠ {svc_name} may not be fully ready after {health_timeout}s (proceeding anyway)")
 
+
+    def _patch_config_files(self, deploy_id: str, repo_dir: str,
+                            companion_info: Dict[str, Dict[str, Any]]):
+        """Scan config files for hardcoded connection strings and replace them
+        with the companion service URLs. Handles repos that use config files
+        instead of (or in addition to) environment variables."""
+        import re
+        import glob
+
+        if not companion_info:
+            return
+
+        # Build a map of old-pattern -> new-value for each service
+        replacements = {}
+        for svc_name, svc_data in companion_info.items():
+            inject = svc_data.get("inject_env", {})
+            if svc_name == "mongodb":
+                # Replace any mongodb:// URI pointing to localhost/atlas/mlab/etc.
+                new_uri = inject.get("MONGO_URI", "mongodb://mongodb:27017/app")
+                replacements["mongodb"] = {
+                    "pattern": re.compile(
+                        r"""(["'])(mongodb(?:\+srv)?://[^"']+)\1""",
+                        re.IGNORECASE,
+                    ),
+                    "replacement_uri": new_uri,
+                }
+            elif svc_name == "mysql":
+                new_uri = inject.get("MYSQL_URI", "mysql://appuser:apppass@mysql:3306/app")
+                replacements["mysql"] = {
+                    "pattern": re.compile(
+                        r"""(["'])(mysql://[^"']+)\1""",
+                        re.IGNORECASE,
+                    ),
+                    "replacement_uri": new_uri,
+                }
+            elif svc_name == "postgres":
+                new_uri = inject.get("DATABASE_URL", "postgresql://appuser:apppass@postgres:5432/app")
+                replacements["postgres"] = {
+                    "pattern": re.compile(
+                        r"""(["'])(postgres(?:ql)?://[^"']+)\1""",
+                        re.IGNORECASE,
+                    ),
+                    "replacement_uri": new_uri,
+                }
+            elif svc_name == "redis":
+                new_uri = inject.get("REDIS_URL", "redis://redis:6379")
+                replacements["redis"] = {
+                    "pattern": re.compile(
+                        r"""(["'])(redis://[^"']+)\1""",
+                        re.IGNORECASE,
+                    ),
+                    "replacement_uri": new_uri,
+                }
+
+        if not replacements:
+            return
+
+        # Scan JS/TS/JSON config files for hardcoded URIs
+        config_globs = [
+            "config/**/*.js", "config/**/*.ts", "config/**/*.json",
+            "src/config/**/*.js", "src/config/**/*.ts",
+            "src/**/*.config.js", "src/**/*.config.ts",
+            "db.js", "database.js", "db.ts", "database.ts",
+            "*.config.js", "*.config.ts",
+            "config.js", "config.ts",
+        ]
+
+        files_patched = 0
+        for pattern in config_globs:
+            for filepath in glob.glob(os.path.join(repo_dir, pattern), recursive=True):
+                if not os.path.isfile(filepath):
+                    continue
+                try:
+                    with open(filepath, "r") as f:
+                        content = f.read()
+
+                    original = content
+                    for svc_name, repl in replacements.items():
+                        def _replace(m):
+                            quote = m.group(1)
+                            return f'{quote}{repl["replacement_uri"]}{quote}'
+                        content = repl["pattern"].sub(_replace, content)
+
+                    if content != original:
+                        with open(filepath, "w") as f:
+                            f.write(content)
+                        rel_path = os.path.relpath(filepath, repo_dir)
+                        self._emit_log(deploy_id, f"  → Patched config: {rel_path}")
+                        files_patched += 1
+
+                except Exception as e:
+                    print(f"[PATCH] Error patching {filepath}: {e}")
+
+        # Also try to make the app read from env vars by adding/patching
+        # a .env loader if the app uses dotenv
+        if files_patched > 0:
+            self._emit_log(deploy_id, f"  ✓ Patched {files_patched} config file(s) with companion service URLs")
 
     def _cleanup_companion_services(self, deploy_id: str):
         """Stop and remove all companion service containers for a deployment."""
@@ -983,6 +1083,11 @@ class Deployer:
 
                 # Re-write .env file with injected vars
                 self._write_env_file(tmp_dir, env_vars)
+
+                # Patch config files that hardcode connection URIs
+                # Many repos (e.g. node_passport_login) use config/keys.js
+                # instead of env vars — we need to rewrite those too
+                self._patch_config_files(deploy_id, tmp_dir, companion_info)
 
                 # Store companion info in deployment state (for frontend)
                 with self._lock:
