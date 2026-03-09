@@ -208,6 +208,36 @@ async def health_check(request: Request):
     }
 
 
+# ─── Blocklist Admin Endpoints ────────────────────────────────────
+@app.get("/admin/blocklist")
+async def list_blocked_ips(request: Request):
+    """List all blocked IPs. Requires admin token."""
+    require_admin(request)
+    return {"blocked_ips": ip_blocklist.list_all()}
+
+
+class BlockIPRequest(BaseModel):
+    ip: str
+    reason: str = "manual"
+
+
+@app.post("/admin/blocklist")
+async def block_ip(req: BlockIPRequest, request: Request):
+    """Block an IP address. Requires admin token."""
+    require_admin(request)
+    ip_blocklist.block(req.ip, req.reason)
+    return {"status": "blocked", "ip": req.ip, "reason": req.reason}
+
+
+@app.delete("/admin/blocklist/{ip}")
+async def unblock_ip(ip: str, request: Request):
+    """Unblock an IP address. Requires admin token."""
+    require_admin(request)
+    if not ip_blocklist.unblock(ip):
+        raise HTTPException(status_code=404, detail="IP not found in blocklist")
+    return {"status": "unblocked", "ip": ip}
+
+
 # ─── Models ───────────────────────────────────────────────────────
 class DeployConfig(BaseModel):
     language: Optional[str] = None
