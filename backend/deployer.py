@@ -108,12 +108,20 @@ SERVICE_MAP = {
     },
 }
 
-# Env var patterns that indicate a service dependency
+# Env var patterns that indicate a service dependency (used when analyzing env keys from frontend)
 SERVICE_DETECT_PATTERNS = {
-    "mysql": ["MYSQL", "DB_HOST", "DB_PORT", "DB_USER", "DB_PASSWORD", "DB_NAME", "MYSQL_URL"],
+    "mysql": ["MYSQL", "DB_HOST", "DB_PORT", "DB_USER", "DB_PASSWORD", "DB_NAME", "MYSQL_URL", "MYSQL_URI"],
     "postgres": ["POSTGRES", "DATABASE_URL", "PG_", "PGHOST", "PGDATABASE", "PGUSER", "PGPASSWORD"],
-    "redis": ["REDIS_URL", "REDIS_HOST", "REDIS_PORT"],
+    "redis": ["REDIS_URL", "REDIS_HOST", "REDIS_PORT", "IOREDIS"],
     "mongodb": ["MONGODB_URI", "MONGO_URL", "MONGO_URI", "MONGODB_URL"],
+}
+
+# Keywords to scan in package.json / .env files for local detection
+SERVICE_FILE_INDICATORS = {
+    "mongodb": ["mongoose", "mongodb", "mongo", "mongoclient"],
+    "mysql": ["mysql", "mysql2", "sequelize", "knex", "typeorm"],
+    "postgres": ["pg", "postgres", "sequelize", "knex", "typeorm", "prisma"],
+    "redis": ["redis", "ioredis", "bull", "bullmq"],
 }
 
 
@@ -128,6 +136,46 @@ def _detect_services_from_env(env_keys: List[str]) -> List[str]:
                     detected.add(service)
                     break
     return list(detected)
+
+
+def _detect_services_from_files(repo_dir: str) -> List[str]:
+    """Detect which services a repo needs by scanning package.json and .env files."""
+    content = ""
+
+    # Read package.json
+    pkg_path = os.path.join(repo_dir, "package.json")
+    if os.path.exists(pkg_path):
+        try:
+            with open(pkg_path, "r") as f:
+                content += f.read().lower()
+        except Exception:
+            pass
+
+    # Read .env example files
+    for env_file in [".env.example", ".env.sample", ".env", ".env.local"]:
+        p = os.path.join(repo_dir, env_file)
+        if os.path.exists(p):
+            try:
+                with open(p, "r") as f:
+                    content += "\n" + f.read().lower()
+            except Exception:
+                pass
+
+    # Read requirements.txt for Python projects
+    req_path = os.path.join(repo_dir, "requirements.txt")
+    if os.path.exists(req_path):
+        try:
+            with open(req_path, "r") as f:
+                content += "\n" + f.read().lower()
+        except Exception:
+            pass
+
+    needed = []
+    for service, keywords in SERVICE_FILE_INDICATORS.items():
+        if any(k in content for k in keywords):
+            needed.append(service)
+
+    return needed
 
 
 def _allocate_port() -> int:
