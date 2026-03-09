@@ -45,34 +45,66 @@ MAX_FIX_RETRIES = 3
 
 # ─── Companion Service Map ────────────────────────────────────────
 SERVICE_MAP = {
+    "mongodb": {
+        "image": "mongo:6",
+        "port": 27017,
+        "env": {},
+        "inject": {
+            "MONGO_URI": "mongodb://mongodb:27017/app",
+            "MONGODB_URI": "mongodb://mongodb:27017/app",
+            "MONGO_URL": "mongodb://mongodb:27017/app",
+        },
+        "health_timeout": 20,
+    },
     "mysql": {
         "image": "mysql:8",
-        "env": {"MYSQL_ROOT_PASSWORD": "auto", "MYSQL_DATABASE": "app"},
         "port": 3306,
-        "inject": {"DB_HOST": "{hostname}", "DB_PORT": "3306", "DB_USER": "root", "DB_PASSWORD": "{password}", "DB_NAME": "app"},
-        "health_cmd": ["mysqladmin", "ping", "-h", "localhost"],
-        "health_timeout": 30,
+        "env": {
+            "MYSQL_ROOT_PASSWORD": "rootpass",
+            "MYSQL_DATABASE": "app",
+            "MYSQL_USER": "appuser",
+            "MYSQL_PASSWORD": "apppass",
+        },
+        "inject": {
+            "DB_HOST": "mysql",
+            "DB_PORT": "3306",
+            "DB_USER": "appuser",
+            "DB_PASSWORD": "apppass",
+            "DB_NAME": "app",
+            "MYSQL_URI": "mysql://appuser:apppass@mysql:3306/app",
+        },
+        "health_cmd": ["mysqladmin", "ping", "-h", "localhost", "-u", "root", "-prootpass"],
+        "health_timeout": 40,
+    },
+    "postgres": {
+        "image": "postgres:15",
+        "port": 5432,
+        "env": {
+            "POSTGRES_PASSWORD": "apppass",
+            "POSTGRES_DB": "app",
+            "POSTGRES_USER": "appuser",
+        },
+        "inject": {
+            "DATABASE_URL": "postgresql://appuser:apppass@postgres:5432/app",
+            "DB_HOST": "postgres",
+            "DB_USER": "appuser",
+            "DB_PASSWORD": "apppass",
+            "DB_NAME": "app",
+        },
+        "health_cmd": ["pg_isready", "-U", "appuser"],
+        "health_timeout": 20,
     },
     "redis": {
         "image": "redis:alpine",
         "port": 6379,
-        "inject": {"REDIS_URL": "redis://{hostname}:6379"},
+        "env": {},
+        "inject": {
+            "REDIS_URL": "redis://redis:6379",
+            "REDIS_HOST": "redis",
+            "REDIS_PORT": "6379",
+        },
         "health_cmd": ["redis-cli", "ping"],
         "health_timeout": 10,
-    },
-    "postgres": {
-        "image": "postgres:15",
-        "env": {"POSTGRES_PASSWORD": "auto", "POSTGRES_DB": "app"},
-        "port": 5432,
-        "inject": {"DATABASE_URL": "postgresql://postgres:{password}@{hostname}:5432/app"},
-        "health_cmd": ["pg_isready", "-U", "postgres"],
-        "health_timeout": 15,
-    },
-    "mongodb": {
-        "image": "mongo:6",
-        "port": 27017,
-        "inject": {"MONGODB_URI": "mongodb://{hostname}:27017/app"},
-        "health_timeout": 15,
     },
 }
 
