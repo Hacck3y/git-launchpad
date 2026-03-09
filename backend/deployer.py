@@ -944,13 +944,23 @@ class Deployer:
                 app_port = deploy_config.get("port", 3000)
 
             # --- Detect and start companion services ---
-            env_keys = list(env_vars.keys())
-            # Also check deploy_config detected_services if provided
+            # Priority: 1) AI-detected from frontend, 2) local file scan, 3) env key patterns
             detected_services = []
             if deploy_config and deploy_config.get("detected_services"):
                 detected_services = deploy_config["detected_services"]
-            else:
-                detected_services = _detect_services_from_env(env_keys)
+            
+            # Also scan cloned repo files for service indicators
+            file_detected = _detect_services_from_files(tmp_dir)
+            env_detected = _detect_services_from_env(list(env_vars.keys()))
+            
+            # Merge all detected services (deduplicate)
+            all_detected = set(detected_services) | set(file_detected) | set(env_detected)
+            detected_services = [s for s in all_detected if s in SERVICE_MAP]
+            
+            if file_detected:
+                self._emit_log(deploy_id, f"▶ File scan detected: {', '.join(file_detected)}")
+            if env_detected:
+                self._emit_log(deploy_id, f"▶ Env var scan detected: {', '.join(env_detected)}")
 
             companion_info = {}
             if detected_services:
