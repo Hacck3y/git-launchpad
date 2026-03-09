@@ -12,9 +12,9 @@ import {
   Loader2,
   Trash2,
   RefreshCw,
+  Share2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Progress } from "@/components/ui/progress";
 import { toast } from "sonner";
 import Navbar from "@/components/Navbar";
 import { useAuth } from "@/contexts/AuthContext";
@@ -51,6 +51,7 @@ const Dashboard = () => {
 
     if (error) {
       console.error("Failed to fetch deployments:", error);
+      toast.error("Failed to load deployments");
     } else {
       setDeployments((data as Deployment[]) || []);
     }
@@ -61,19 +62,13 @@ const Dashboard = () => {
     fetchDeployments();
   }, [user]);
 
-  // Live countdown update every second
   useEffect(() => {
     const interval = setInterval(() => {
       setDeployments((prev) =>
         prev.map((d) => {
           if (d.status === "live" && d.expires_at) {
-            const remaining = Math.max(
-              0,
-              Math.floor((new Date(d.expires_at).getTime() - Date.now()) / 1000)
-            );
-            if (remaining === 0 && d.status === "live") {
-              return { ...d, status: "expired" };
-            }
+            const remaining = Math.max(0, Math.floor((new Date(d.expires_at).getTime() - Date.now()) / 1000));
+            if (remaining === 0) return { ...d, status: "expired" };
           }
           return d;
         })
@@ -84,10 +79,7 @@ const Dashboard = () => {
 
   const getTimeRemaining = (expiresAt: string | null): string => {
     if (!expiresAt) return "—";
-    const remaining = Math.max(
-      0,
-      Math.floor((new Date(expiresAt).getTime() - Date.now()) / 1000)
-    );
+    const remaining = Math.max(0, Math.floor((new Date(expiresAt).getTime() - Date.now()) / 1000));
     if (remaining === 0) return "Expired";
     const m = Math.floor(remaining / 60);
     const s = remaining % 60;
@@ -98,10 +90,7 @@ const Dashboard = () => {
     if (d.status === "error" || d.status === "failed") return "error";
     if (d.status === "expired" || d.status === "killed") return "expired";
     if (d.status === "live" || d.status === "running" || d.status === "ready") {
-      if (d.expires_at) {
-        const remaining = new Date(d.expires_at).getTime() - Date.now();
-        if (remaining <= 0) return "expired";
-      }
+      if (d.expires_at && new Date(d.expires_at).getTime() - Date.now() <= 0) return "expired";
       return "live";
     }
     return "deploying";
@@ -116,10 +105,7 @@ const Dashboard = () => {
     setKillingId(d.id);
     try {
       await killDeployment(d.deploy_id);
-      await supabase
-        .from("deployments")
-        .update({ status: "killed" } as any)
-        .eq("id", d.id);
+      await supabase.from("deployments").update({ status: "killed" } as any).eq("id", d.id);
       toast.success("Deployment stopped");
       fetchDeployments();
     } catch (err: any) {
@@ -130,9 +116,9 @@ const Dashboard = () => {
   };
 
   const statusConfig = {
-    live: { label: "Live", icon: CheckCircle2, className: "text-emerald-400" },
+    live: { label: "Live", icon: CheckCircle2, className: "text-success" },
     expired: { label: "Expired", icon: XCircle, className: "text-muted-foreground" },
-    deploying: { label: "Deploying", icon: Clock, className: "text-amber-400" },
+    deploying: { label: "Deploying", icon: Clock, className: "text-warning" },
     error: { label: "Failed", icon: XCircle, className: "text-destructive" },
   };
 
@@ -184,20 +170,16 @@ const Dashboard = () => {
 
           {/* Stats cards */}
           <div className="grid grid-cols-3 gap-4 mb-8">
-            <div className="rounded-xl border border-border bg-card/50 p-5 text-center">
-              <p className="text-3xl font-bold text-primary">{totalCount}</p>
-              <p className="text-xs text-muted-foreground mt-1">Total Deploys</p>
-            </div>
-            <div className="rounded-xl border border-border bg-card/50 p-5 text-center">
-              <p className="text-3xl font-bold text-emerald-400">{liveCount}</p>
-              <p className="text-xs text-muted-foreground mt-1">Active Now</p>
-            </div>
-            <div className="rounded-xl border border-border bg-card/50 p-5 text-center">
-              <p className="text-3xl font-bold text-muted-foreground">
-                {deployments.filter((d) => getEffectiveStatus(d) === "expired").length}
-              </p>
-              <p className="text-xs text-muted-foreground mt-1">Expired</p>
-            </div>
+            {[
+              { value: totalCount, label: "Total Deploys", color: "text-primary" },
+              { value: liveCount, label: "Active Now", color: "text-success" },
+              { value: deployments.filter((d) => getEffectiveStatus(d) === "expired").length, label: "Expired", color: "text-muted-foreground" },
+            ].map((stat) => (
+              <div key={stat.label} className="rounded-xl border border-border bg-card/50 p-5 text-center">
+                <p className={`text-3xl font-bold ${stat.color}`}>{stat.value}</p>
+                <p className="text-xs text-muted-foreground mt-1">{stat.label}</p>
+              </div>
+            ))}
           </div>
 
           {/* Loading state */}
@@ -231,103 +213,140 @@ const Dashboard = () => {
             </motion.div>
           )}
 
-          {/* Deployments table */}
+          {/* Deployments — card layout for mobile, table for desktop */}
           {!loading && deployments.length > 0 && (
-            <div className="rounded-xl border border-border bg-card/50 overflow-hidden">
-              <div className="grid grid-cols-[1fr_auto_auto_auto_auto] gap-4 items-center px-6 py-3 border-b border-border text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                <span>Repository</span>
-                <span>Stack</span>
-                <span>Status</span>
-                <span>Time Left</span>
-                <span>Actions</span>
+            <>
+              {/* Desktop table */}
+              <div className="hidden md:block rounded-xl border border-border bg-card/50 overflow-hidden">
+                <div className="grid grid-cols-[1fr_auto_auto_auto_auto] gap-4 items-center px-6 py-3 border-b border-border text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                  <span>Repository</span>
+                  <span>Stack</span>
+                  <span>Status</span>
+                  <span>Time Left</span>
+                  <span>Actions</span>
+                </div>
+
+                {deployments.map((deploy, i) => {
+                  const effectiveStatus = getEffectiveStatus(deploy);
+                  const status = statusConfig[effectiveStatus];
+                  const StatusIcon = status.icon;
+
+                  return (
+                    <motion.div
+                      key={deploy.id}
+                      initial={{ opacity: 0, x: -10 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      transition={{ delay: i * 0.03 }}
+                      className="grid grid-cols-[1fr_auto_auto_auto_auto] gap-4 items-center px-6 py-4 border-b border-border/50 last:border-0 hover:bg-muted/30 transition-colors"
+                    >
+                      <div className="min-w-0">
+                        <p className="font-mono text-sm font-medium truncate">{deploy.repo_name}</p>
+                        <p className="text-xs text-muted-foreground">
+                          {new Date(deploy.created_at).toLocaleDateString(undefined, {
+                            month: "short", day: "numeric", hour: "2-digit", minute: "2-digit",
+                          })}
+                        </p>
+                      </div>
+
+                      <span className="text-xs font-mono text-muted-foreground whitespace-nowrap">
+                        {deploy.framework || deploy.language || "—"}
+                      </span>
+
+                      <div className={`flex items-center gap-1.5 text-sm whitespace-nowrap ${status.className}`}>
+                        <StatusIcon className="h-3.5 w-3.5" />
+                        {status.label}
+                      </div>
+
+                      <span className="text-sm font-mono text-muted-foreground whitespace-nowrap">
+                        {effectiveStatus === "live" ? getTimeRemaining(deploy.expires_at) : "—"}
+                      </span>
+
+                      <div className="flex items-center gap-1">
+                        {effectiveStatus === "live" && deploy.preview_url && (
+                          <>
+                            <Button variant="ghost" size="sm" className="h-8 w-8 p-0 hover:text-primary" onClick={() => window.open(deploy.preview_url!, "_blank")} title="Open preview">
+                              <ExternalLink className="h-3.5 w-3.5" />
+                            </Button>
+                            <Button variant="ghost" size="sm" className="h-8 w-8 p-0 hover:text-primary" onClick={() => copyLink(deploy.preview_url!)} title="Copy link">
+                              <Copy className="h-3.5 w-3.5" />
+                            </Button>
+                            <Button variant="ghost" size="sm" className="h-8 w-8 p-0 hover:text-primary" onClick={() => copyLink(`${window.location.origin}/preview/${deploy.deploy_id}`)} title="Share preview page">
+                              <Share2 className="h-3.5 w-3.5" />
+                            </Button>
+                            <Button variant="ghost" size="sm" className="h-8 w-8 p-0 hover:text-destructive" onClick={() => handleKill(deploy)} disabled={killingId === deploy.id} title="Stop deployment">
+                              {killingId === deploy.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+                            </Button>
+                          </>
+                        )}
+                        {effectiveStatus === "expired" && (
+                          <Link to={`/deploy?repo=${encodeURIComponent(deploy.repo_url)}`}>
+                            <Button variant="ghost" size="sm" className="text-xs hover:text-primary">Redeploy</Button>
+                          </Link>
+                        )}
+                      </div>
+                    </motion.div>
+                  );
+                })}
               </div>
 
-              {deployments.map((deploy, i) => {
-                const effectiveStatus = getEffectiveStatus(deploy);
-                const status = statusConfig[effectiveStatus];
-                const StatusIcon = status.icon;
+              {/* Mobile cards */}
+              <div className="md:hidden space-y-3">
+                {deployments.map((deploy, i) => {
+                  const effectiveStatus = getEffectiveStatus(deploy);
+                  const status = statusConfig[effectiveStatus];
+                  const StatusIcon = status.icon;
 
-                return (
-                  <motion.div
-                    key={deploy.id}
-                    initial={{ opacity: 0, x: -10 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    transition={{ delay: i * 0.03 }}
-                    className="grid grid-cols-[1fr_auto_auto_auto_auto] gap-4 items-center px-6 py-4 border-b border-border/50 last:border-0 hover:bg-muted/30 transition-colors"
-                  >
-                    <div className="min-w-0">
-                      <p className="font-mono text-sm font-medium truncate">{deploy.repo_name}</p>
-                      <p className="text-xs text-muted-foreground">
-                        {new Date(deploy.created_at).toLocaleDateString(undefined, {
-                          month: "short",
-                          day: "numeric",
-                          hour: "2-digit",
-                          minute: "2-digit",
-                        })}
-                      </p>
-                    </div>
+                  return (
+                    <motion.div
+                      key={deploy.id}
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ delay: i * 0.03 }}
+                      className="rounded-xl border border-border bg-card/50 p-4"
+                    >
+                      <div className="flex items-start justify-between mb-3">
+                        <div className="min-w-0 flex-1">
+                          <p className="font-mono text-sm font-medium truncate">{deploy.repo_name}</p>
+                          <p className="text-xs text-muted-foreground mt-0.5">
+                            {deploy.framework || deploy.language || "—"} ·{" "}
+                            {new Date(deploy.created_at).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
+                          </p>
+                        </div>
+                        <div className={`flex items-center gap-1 text-xs ${status.className}`}>
+                          <StatusIcon className="h-3 w-3" />
+                          {status.label}
+                        </div>
+                      </div>
 
-                    <span className="text-xs font-mono text-muted-foreground whitespace-nowrap">
-                      {deploy.framework || deploy.language || "—"}
-                    </span>
-
-                    <div className={`flex items-center gap-1.5 text-sm whitespace-nowrap ${status.className}`}>
-                      <StatusIcon className="h-3.5 w-3.5" />
-                      {status.label}
-                    </div>
-
-                    <span className="text-sm font-mono text-muted-foreground whitespace-nowrap">
-                      {effectiveStatus === "live"
-                        ? getTimeRemaining(deploy.expires_at)
-                        : "—"}
-                    </span>
-
-                    <div className="flex items-center gap-1">
-                      {effectiveStatus === "live" && deploy.preview_url && (
-                        <>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="gap-1 text-xs hover:text-primary"
-                            onClick={() => window.open(deploy.preview_url!, "_blank")}
-                          >
-                            <ExternalLink className="h-3.5 w-3.5" />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="gap-1 text-xs hover:text-primary"
-                            onClick={() => copyLink(deploy.preview_url!)}
-                          >
-                            <Copy className="h-3.5 w-3.5" />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="text-xs hover:text-destructive"
-                            onClick={() => handleKill(deploy)}
-                            disabled={killingId === deploy.id}
-                          >
-                            {killingId === deploy.id ? (
-                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                            ) : (
-                              <Trash2 className="h-3.5 w-3.5" />
+                      {effectiveStatus === "live" && (
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs text-muted-foreground font-mono">
+                            ⏱ {getTimeRemaining(deploy.expires_at)}
+                          </span>
+                          <div className="flex gap-1">
+                            {deploy.preview_url && (
+                              <>
+                                <Button variant="ghost" size="sm" className="h-7 text-xs gap-1 hover:text-primary" onClick={() => window.open(deploy.preview_url!, "_blank")}>
+                                  <ExternalLink className="h-3 w-3" /> Open
+                                </Button>
+                                <Button variant="ghost" size="sm" className="h-7 text-xs hover:text-destructive" onClick={() => handleKill(deploy)} disabled={killingId === deploy.id}>
+                                  {killingId === deploy.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
+                                </Button>
+                              </>
                             )}
-                          </Button>
-                        </>
+                          </div>
+                        </div>
                       )}
                       {effectiveStatus === "expired" && (
                         <Link to={`/deploy?repo=${encodeURIComponent(deploy.repo_url)}`}>
-                          <Button variant="ghost" size="sm" className="text-xs hover:text-primary">
-                            Redeploy
-                          </Button>
+                          <Button variant="ghost" size="sm" className="text-xs hover:text-primary w-full mt-1">Redeploy</Button>
                         </Link>
                       )}
-                    </div>
-                  </motion.div>
-                );
-              })}
-            </div>
+                    </motion.div>
+                  );
+                })}
+              </div>
+            </>
           )}
         </motion.div>
       </main>

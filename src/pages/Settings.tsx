@@ -1,12 +1,13 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
-import { User, Palette, Trash2, Save, Moon, Sun } from "lucide-react";
+import { User, Palette, Trash2, Save, Moon, Sun, Loader2, Mail, Shield } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
+import { Separator } from "@/components/ui/separator";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -26,7 +27,7 @@ import { useTheme } from "@/contexts/ThemeContext";
 
 const Settings = () => {
   const navigate = useNavigate();
-  const { user, profile, signOut } = useAuth();
+  const { user, profile, signOut, refreshProfile } = useAuth();
   const { theme, setTheme } = useTheme();
   const [displayName, setDisplayName] = useState("");
   const [saving, setSaving] = useState(false);
@@ -44,14 +45,19 @@ const Settings = () => {
 
   const handleSaveProfile = async () => {
     if (!user) return;
+    if (!displayName.trim()) {
+      toast.error("Display name cannot be empty");
+      return;
+    }
     setSaving(true);
     try {
       const { error } = await supabase
         .from("profiles")
-        .update({ display_name: displayName })
+        .update({ display_name: displayName.trim() })
         .eq("user_id", user.id);
       if (error) throw error;
       toast.success("Profile updated successfully");
+      await refreshProfile();
     } catch (err) {
       toast.error("Failed to update profile");
       console.error(err);
@@ -64,7 +70,7 @@ const Settings = () => {
     if (!user) return;
     setDeleting(true);
     try {
-      // Delete profile first, then sign out
+      await supabase.from("deployments").delete().eq("user_id", user.id);
       await supabase.from("profiles").delete().eq("user_id", user.id);
       await signOut();
       toast.success("Account deleted. Sorry to see you go!");
@@ -99,15 +105,41 @@ const Settings = () => {
                 <User className="h-5 w-5 text-primary" />
                 Profile
               </CardTitle>
-              <CardDescription>Update your display name</CardDescription>
+              <CardDescription>Update your display name and view account info</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="mb-4">
-                <p className="text-sm text-muted-foreground">{profile?.email || user.email}</p>
+              <div className="flex items-center gap-3 p-3 rounded-lg bg-muted/50 border border-border">
+                <Mail className="h-4 w-4 text-muted-foreground shrink-0" />
+                <div>
+                  <p className="text-xs text-muted-foreground">Email</p>
+                  <p className="text-sm font-mono">{profile?.email || user.email}</p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-3 p-3 rounded-lg bg-muted/50 border border-border">
+                <Shield className="h-4 w-4 text-muted-foreground shrink-0" />
+                <div>
+                  <p className="text-xs text-muted-foreground">Auth Provider</p>
+                  <p className="text-sm">Google OAuth</p>
+                </div>
+              </div>
+
+              <Separator />
+
+              <div className="space-y-2">
+                <Label htmlFor="displayName">Display Name</Label>
+                <Input
+                  id="displayName"
+                  value={displayName}
+                  onChange={(e) => setDisplayName(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && handleSaveProfile()}
+                  placeholder="Your display name"
+                  className="bg-input border-border"
+                />
               </div>
 
               <Button onClick={handleSaveProfile} disabled={saving} className="gap-2">
-                <Save className="h-4 w-4" />
+                {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
                 {saving ? "Saving..." : "Save Changes"}
               </Button>
             </CardContent>
@@ -155,6 +187,9 @@ const Settings = () => {
               <CardDescription>Irreversible actions for your account</CardDescription>
             </CardHeader>
             <CardContent>
+              <p className="text-sm text-muted-foreground mb-4">
+                Deleting your account will permanently remove your profile and all deployment history. This action cannot be undone.
+              </p>
               <AlertDialog>
                 <AlertDialogTrigger asChild>
                   <Button variant="destructive" className="gap-2">
@@ -166,7 +201,7 @@ const Settings = () => {
                   <AlertDialogHeader>
                     <AlertDialogTitle>Are you absolutely sure?</AlertDialogTitle>
                     <AlertDialogDescription>
-                      This will permanently delete your account and all associated data. This action cannot be undone.
+                      This will permanently delete your account, profile, and all deployment history. This action cannot be undone.
                     </AlertDialogDescription>
                   </AlertDialogHeader>
                   <AlertDialogFooter>
