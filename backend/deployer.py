@@ -401,24 +401,23 @@ class Deployer:
             try:
                 self._emit_log(deploy_id, f"▶ Starting {svc_name} ({svc_config['image']})...")
 
-                container = self.docker.containers.run(
+                # Create container first (not started), then connect to network
+                # with proper alias, then start — this is the reliable way to
+                # ensure DNS alias resolution works on the Docker network.
+                container = self.docker.containers.create(
                     image=svc_config["image"],
                     name=container_name,
-                    detach=True,
-                    network=network_name,
+                    environment=env,
                     mem_limit="256m",
                     nano_cpus=int(0.5e9),  # 0.5 CPU
-                    environment=env,
-                    remove=False,
                 )
 
-                # Set network alias so app can reach it by service name
-                try:
-                    network = self.docker.networks.get(network_name)
-                    network.disconnect(container)
-                    network.connect(container, aliases=[svc_name])
-                except Exception:
-                    pass  # Already connected with alias during run
+                # Connect to network with alias BEFORE starting
+                network = self.docker.networks.get(network_name)
+                network.connect(container, aliases=[svc_name])
+
+                # Now start the container
+                container.start()
 
                 # Inject env vars are static — copy directly from SERVICE_MAP
                 inject_env = dict(svc_config.get("inject", {}))
