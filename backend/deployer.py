@@ -575,22 +575,31 @@ class Deployer:
             for filepath in glob.glob(os.path.join(repo_dir, pattern), recursive=True):
                 if not os.path.isfile(filepath):
                     continue
+                # Skip node_modules, .git, etc.
+                rel = os.path.relpath(filepath, repo_dir)
+                if any(rel.startswith(sd + os.sep) or rel.startswith(sd + "/") for sd in skip_dirs):
+                    continue
+                # Skip large files (likely not source code)
                 try:
-                    with open(filepath, "r") as f:
+                    if os.path.getsize(filepath) > 500_000:
+                        continue
+                except OSError:
+                    continue
+                try:
+                    with open(filepath, "r", errors="ignore") as f:
                         content = f.read()
 
                     original = content
                     for svc_name, repl in replacements.items():
-                        def _replace(m):
+                        def _replace(m, _repl=repl):
                             quote = m.group(1)
-                            return f'{quote}{repl["replacement_uri"]}{quote}'
+                            return f'{quote}{_repl["replacement_uri"]}{quote}'
                         content = repl["pattern"].sub(_replace, content)
 
                     if content != original:
                         with open(filepath, "w") as f:
                             f.write(content)
-                        rel_path = os.path.relpath(filepath, repo_dir)
-                        self._emit_log(deploy_id, f"  → Patched config: {rel_path}")
+                        self._emit_log(deploy_id, f"  → Patched: {rel}")
                         files_patched += 1
 
                 except Exception as e:
