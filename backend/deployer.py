@@ -524,8 +524,9 @@ class Deployer:
                 # Replace any mongodb:// URI pointing to localhost/atlas/mlab/etc.
                 new_uri = inject.get("MONGO_URI", "mongodb://mongodb:27017/app")
                 replacements["mongodb"] = {
+                    # Match single-quoted, double-quoted, AND backtick-quoted URIs
                     "pattern": re.compile(
-                        r"""(["'])(mongodb(?:\+srv)?://[^"']+)\1""",
+                        r"""(["'`])(mongodb(?:\+srv)?://[^"'`]+)\1""",
                         re.IGNORECASE,
                     ),
                     "replacement_uri": new_uri,
@@ -561,46 +562,79 @@ class Deployer:
         if not replacements:
             return
 
-        # Scan JS/TS/JSON config files for hardcoded URIs
+        # Scan ALL JS/TS/JSON files for hardcoded URIs — not just config dirs.
+        # Many repos hardcode connection strings in app.js, server.js, models/, etc.
         config_globs = [
-            "config/**/*.js", "config/**/*.ts", "config/**/*.json",
-            "src/config/**/*.js", "src/config/**/*.ts",
-            "src/**/*.config.js", "src/**/*.config.ts",
-            "db.js", "database.js", "db.ts", "database.ts",
-            "*.config.js", "*.config.ts",
-            "config.js", "config.ts",
+            "**/*.js", "**/*.ts", "**/*.json",
         ]
+        # Directories to skip
+        skip_dirs = {"node_modules", ".git", "dist", "build", ".next", "coverage", "__pycache__"}
+
 
         files_patched = 0
         for pattern in config_globs:
             for filepath in glob.glob(os.path.join(repo_dir, pattern), recursive=True):
                 if not os.path.isfile(filepath):
                     continue
+                # Skip node_modules, .git, etc.
+                rel = os.path.relpath(filepath, repo_dir)
+                if any(rel.startswith(sd + os.sep) or rel.startswith(sd + "/") for sd in skip_dirs):
+                    continue
+                # Skip large files (likely not source code)
                 try:
-                    with open(filepath, "r") as f:
+                    if os.path.getsize(filepath) > 500_000:
+                        continue
+                except OSError:
+                    continue
+                try:
+                    with open(filepath, "r", errors="ignore") as f:
                         content = f.read()
 
                     original = content
                     for svc_name, repl in replacements.items():
-                        def _replace(m):
+                        def _replace(m, _repl=repl):
                             quote = m.group(1)
-                            return f'{quote}{repl["replacement_uri"]}{quote}'
+                            return f'{quote}{_repl["replacement_uri"]}{quote}'
                         content = repl["pattern"].sub(_replace, content)
 
                     if content != original:
                         with open(filepath, "w") as f:
                             f.write(content)
-                        rel_path = os.path.relpath(filepath, repo_dir)
-                        self._emit_log(deploy_id, f"  → Patched config: {rel_path}")
+                        self._emit_log(deploy_id, f"  → Patched: {rel}")
                         files_patched += 1
 
                 except Exception as e:
                     print(f"[PATCH] Error patching {filepath}: {e}")
 
-        # Also try to make the app read from env vars by adding/patching
-        # a .env loader if the app uses dotenv
+        # Also patch .env files that have hardcoded URIs (unquoted values)
+        for env_file in [".env", ".env.example", ".env.sample", ".env.local"]:
+            env_path = os.path.join(repo_dir, env_file)
+            if not os.path.isfile(env_path):
+                continue
+            try:
+                with open(env_path, "r") as f:
+                    content = f.read()
+                original = content
+                for svc_name, repl in replacements.items():
+                    # Match unquoted env values: KEY=mongodb://...
+                    unquoted = re.compile(
+                        r"(=\s*)(mongodb(?:\+srv)?://\S+)" if svc_name == "mongodb" else
+                        r"(=\s*)(mysql://\S+)" if svc_name == "mysql" else
+                        r"(=\s*)(postgres(?:ql)?://\S+)" if svc_name == "postgres" else
+                        r"(=\s*)(redis://\S+)",
+                        re.IGNORECASE,
+                    )
+                    content = unquoted.sub(r"\g<1>" + repl["replacement_uri"], content)
+                if content != original:
+                    with open(env_path, "w") as f:
+                        f.write(content)
+                    self._emit_log(deploy_id, f"  → Patched: {env_file}")
+                    files_patched += 1
+            except Exception as e:
+                print(f"[PATCH] Error patching {env_path}: {e}")
+
         if files_patched > 0:
-            self._emit_log(deploy_id, f"  ✓ Patched {files_patched} config file(s) with companion service URLs")
+            self._emit_log(deploy_id, f"  ✓ Patched {files_patched} file(s) with companion service URLs")
 
     def _cleanup_companion_services(self, deploy_id: str):
         """Stop and remove all companion service containers for a deployment."""
