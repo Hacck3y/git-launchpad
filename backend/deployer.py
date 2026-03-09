@@ -524,8 +524,9 @@ class Deployer:
                 # Replace any mongodb:// URI pointing to localhost/atlas/mlab/etc.
                 new_uri = inject.get("MONGO_URI", "mongodb://mongodb:27017/app")
                 replacements["mongodb"] = {
+                    # Match single-quoted, double-quoted, AND backtick-quoted URIs
                     "pattern": re.compile(
-                        r"""(["'])(mongodb(?:\+srv)?://[^"']+)\1""",
+                        r"""(["'`])(mongodb(?:\+srv)?://[^"'`]+)\1""",
                         re.IGNORECASE,
                     ),
                     "replacement_uri": new_uri,
