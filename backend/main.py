@@ -25,6 +25,29 @@ deployer = Deployer()
 cleanup_manager = CleanupManager(deployer)
 cleanup_manager.start()
 
+import time, docker as _docker_mod
+
+_start_time = time.time()
+
+
+@app.get("/health")
+async def health_check():
+    """Health endpoint for uptime monitoring (UptimeRobot, Better Uptime, etc.)."""
+    uptime = time.time() - _start_time
+    active = deployer.get_all_deployments() if hasattr(deployer, "get_all_deployments") else {}
+    docker_ok = False
+    try:
+        _docker_mod.from_env().ping()
+        docker_ok = True
+    except Exception:
+        pass
+    return {
+        "status": "healthy" if docker_ok else "degraded",
+        "uptime_seconds": round(uptime, 1),
+        "docker": "connected" if docker_ok else "unavailable",
+        "active_deployments": len(active) if isinstance(active, (dict, list)) else 0,
+    }
+
 
 class DeployConfig(BaseModel):
     language: Optional[str] = None
