@@ -505,7 +505,7 @@ class Deployer:
     def _cleanup_companion_services(self, deploy_id: str):
         """Stop and remove all companion service containers for a deployment."""
         for svc_name in SERVICE_MAP:
-            container_name = f"svc-{deploy_id}-{svc_name}"
+            container_name = f"gitpreview_{deploy_id}_{svc_name}"
             self._cleanup_container(container_name)
 
         network_name = f"gitpreview_{deploy_id}_net"
