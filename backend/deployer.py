@@ -984,7 +984,7 @@ class Deployer:
                 # Re-write .env file with injected vars
                 self._write_env_file(tmp_dir, env_vars)
 
-                # Store companion info in deployment state (sanitized for frontend)
+                # Store companion info in deployment state (for frontend)
                 with self._lock:
                     if deploy_id in self.deployments:
                         self.deployments[deploy_id]["companion_services"] = {
@@ -993,7 +993,7 @@ class Deployer:
                                 "image": data["image"],
                                 "hostname": data["hostname"],
                                 "port": data["port"],
-                                "password": data.get("password"),
+                                "credentials": data.get("credentials", {}),
                                 "inject_env": data.get("inject_env", {}),
                                 "container_name": data["container_name"],
                             }
