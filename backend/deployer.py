@@ -987,6 +987,11 @@ class Deployer:
                 # Re-write .env file with injected vars
                 self._write_env_file(tmp_dir, env_vars)
 
+                # Patch config files that hardcode connection URIs
+                # Many repos (e.g. node_passport_login) use config/keys.js
+                # instead of env vars — we need to rewrite those too
+                self._patch_config_files(deploy_id, tmp_dir, companion_info)
+
                 # Store companion info in deployment state (for frontend)
                 with self._lock:
                     if deploy_id in self.deployments:
