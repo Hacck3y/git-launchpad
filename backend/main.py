@@ -147,6 +147,15 @@ def check_rate_limit(request: Request, tier: str) -> None:
             },
         )
 
+ADMIN_TOKEN = os.environ.get("ADMIN_TOKEN", "changeme-admin-token")
+
+
+def require_admin(request: Request):
+    """Verify admin bearer token."""
+    auth = request.headers.get("authorization", "")
+    if not auth.startswith("Bearer ") or auth[7:] != ADMIN_TOKEN:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
 
 # ─── App Setup ────────────────────────────────────────────────────
 app = FastAPI(title="Git Launchpad API")
