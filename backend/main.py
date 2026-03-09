@@ -21,22 +21,79 @@ import docker as _docker_mod
 BLOCKLIST_FILE = Path(__file__).parent / "blocked_ips.json"
 
 
+# ─── IP Blocklist ─────────────────────────────────────────────────
+class IPBlocklist:
+    """Persistent IP blocklist backed by a JSON file."""
+
+    def __init__(self, path: Path = BLOCKLIST_FILE):
+        self._path = path
+        self._blocked: Dict[str, dict] = {}  # ip -> {reason, blocked_at}
+        self._load()
+
+    def _load(self):
+        if self._path.exists():
+            try:
+                self._blocked = json.loads(self._path.read_text())
+            except (json.JSONDecodeError, OSError):
+                self._blocked = {}
+
+    def _save(self):
+        try:
+            self._path.write_text(json.dumps(self._blocked, indent=2))
+        except OSError:
+            pass
+
+    def is_blocked(self, ip: str) -> bool:
+        return ip in self._blocked
+
+    def block(self, ip: str, reason: str = "manual") -> None:
+        self._blocked[ip] = {"reason": reason, "blocked_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+        self._save()
+
+    def unblock(self, ip: str) -> bool:
+        if ip in self._blocked:
+            del self._blocked[ip]
+            self._save()
+            return True
+        return False
+
+    def list_all(self) -> Dict[str, dict]:
+        return dict(self._blocked)
+
+
+ip_blocklist = IPBlocklist()
+
+
 # ─── Rate Limiter ─────────────────────────────────────────────────
 class RateLimiter:
-    """In-memory sliding-window rate limiter per IP."""
+    """In-memory sliding-window rate limiter per IP with auto-ban support."""
 
-    def __init__(self):
+    def __init__(self, auto_ban_threshold: int = 50, auto_ban_window: int = 60):
         self._hits: Dict[str, list[float]] = defaultdict(list)
+        self._violations: Dict[str, list[float]] = defaultdict(list)
+        self._auto_ban_threshold = auto_ban_threshold
+        self._auto_ban_window = auto_ban_window
 
     def is_allowed(self, key: str, max_requests: int, window_seconds: int) -> bool:
         now = time.time()
         cutoff = now - window_seconds
-        # Prune old entries
         self._hits[key] = [t for t in self._hits[key] if t > cutoff]
         if len(self._hits[key]) >= max_requests:
+            # Track violation for auto-ban
+            ip = key.split(":", 1)[-1] if ":" in key else key
+            self._record_violation(ip)
             return False
         self._hits[key].append(now)
         return True
+
+    def _record_violation(self, ip: str):
+        now = time.time()
+        cutoff = now - self._auto_ban_window
+        self._violations[ip] = [t for t in self._violations[ip] if t > cutoff]
+        self._violations[ip].append(now)
+        if len(self._violations[ip]) >= self._auto_ban_threshold:
+            ip_blocklist.block(ip, reason="auto-banned: excessive rate limit violations")
+            self._violations.pop(ip, None)
 
     def remaining(self, key: str, max_requests: int, window_seconds: int) -> int:
         now = time.time()
@@ -45,11 +102,11 @@ class RateLimiter:
         return max(0, max_requests - len(recent))
 
     def cleanup(self, max_age: int = 300):
-        """Remove stale entries older than max_age seconds."""
         now = time.time()
-        stale_keys = [k for k, v in self._hits.items() if not v or v[-1] < now - max_age]
-        for k in stale_keys:
-            del self._hits[k]
+        for store in (self._hits, self._violations):
+            stale = [k for k, v in store.items() if not v or v[-1] < now - max_age]
+            for k in stale:
+                del store[k]
 
 
 rate_limiter = RateLimiter()
