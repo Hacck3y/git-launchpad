@@ -75,7 +75,15 @@ SERVICE_MAP = {
             "DB_USER": "appuser",
             "DB_PASSWORD": "apppass",
             "DB_NAME": "app",
+            "DB_USERNAME": "appuser",
+            "MYSQL_HOST": "mysql",
+            "MYSQL_PORT": "3306",
+            "MYSQL_USER": "appuser",
+            "MYSQL_PASSWORD": "apppass",
+            "MYSQL_DATABASE": "app",
             "MYSQL_URI": "mysql://appuser:apppass@mysql:3306/app",
+            "DATABASE_URL": "mysql://appuser:apppass@mysql:3306/app",
+            "DATABASE_HOST": "mysql",
         },
         "health_cmd": ["mysqladmin", "ping", "-h", "localhost", "-u", "root", "-prootpass"],
         "health_timeout": 40,
@@ -559,30 +567,47 @@ class Deployer:
                     "replacement_uri": new_uri,
                 }
 
-        if not replacements:
+        # Build host replacement patterns: replace localhost/127.0.0.1 with service hostname
+        # for apps that use individual config params (host: 'localhost', port: 3306)
+        host_replacements = {}
+        for svc_name, svc_data in companion_info.items():
+            svc_config = SERVICE_MAP.get(svc_name, {})
+            svc_port = str(svc_config.get("port", ""))
+            hostname = svc_name  # network alias
+            host_replacements[svc_name] = {
+                "hostname": hostname,
+                "port": svc_port,
+                # Match host: 'localhost' or host: '127.0.0.1' near service-specific ports
+                "host_pattern": re.compile(
+                    r"""(host\s*[:=]\s*)(["'`])(localhost|127\.0\.0\.1)\2""",
+                    re.IGNORECASE,
+                ),
+                # Match localhost:PORT or 127.0.0.1:PORT (bare, in any context)
+                "hostport_pattern": re.compile(
+                    r"(localhost|127\.0\.0\.1):" + re.escape(svc_port),
+                    re.IGNORECASE,
+                ) if svc_port else None,
+            }
+
+        if not replacements and not host_replacements:
             return
 
-        # Scan JS/TS/JSON/Python files for hardcoded URIs — not just config dirs.
-        # Many repos hardcode connection strings in app.js, server.js, models/, etc.
-        # NOTE: Elixir .ex/.exs files are EXCLUDED — they use atom-based syntax
-        # that breaks when blindly regex-replacing URI strings.
+        # Scan JS/TS/JSON/Python/YAML/TOML files for hardcoded URIs and hosts.
+        # NOTE: Elixir .ex/.exs files are EXCLUDED — atom-based syntax breaks with regex.
         config_globs = [
             "**/*.js", "**/*.ts", "**/*.json", "**/*.py",
+            "**/*.yml", "**/*.yaml", "**/*.toml", "**/*.cfg", "**/*.ini",
         ]
-        # Directories to skip
-        skip_dirs = {"node_modules", ".git", "dist", "build", ".next", "coverage", "__pycache__"}
-
+        skip_dirs = {"node_modules", ".git", "dist", "build", ".next", "coverage", "__pycache__", "vendor"}
 
         files_patched = 0
         for pattern in config_globs:
             for filepath in glob.glob(os.path.join(repo_dir, pattern), recursive=True):
                 if not os.path.isfile(filepath):
                     continue
-                # Skip node_modules, .git, etc.
                 rel = os.path.relpath(filepath, repo_dir)
                 if any(rel.startswith(sd + os.sep) or rel.startswith(sd + "/") for sd in skip_dirs):
                     continue
-                # Skip large files (likely not source code)
                 try:
                     if os.path.getsize(filepath) > 500_000:
                         continue
@@ -593,11 +618,27 @@ class Deployer:
                         content = f.read()
 
                     original = content
+
+                    # 1. Replace full URI strings (mongodb://, mysql://, etc.)
                     for svc_name, repl in replacements.items():
                         def _replace(m, _repl=repl):
                             quote = m.group(1)
                             return f'{quote}{_repl["replacement_uri"]}{quote}'
                         content = repl["pattern"].sub(_replace, content)
+
+                    # 2. Replace host: 'localhost' / host: '127.0.0.1' patterns
+                    for svc_name, hr in host_replacements.items():
+                        def _host_replace(m, _hr=hr):
+                            prefix = m.group(1)
+                            quote = m.group(2)
+                            return f'{prefix}{quote}{_hr["hostname"]}{quote}'
+                        content = hr["host_pattern"].sub(_host_replace, content)
+
+                        # 3. Replace localhost:PORT → hostname:PORT
+                        if hr["hostport_pattern"]:
+                            content = hr["hostport_pattern"].sub(
+                                f'{hr["hostname"]}:{hr["port"]}', content
+                            )
 
                     if content != original:
                         with open(filepath, "w") as f:
