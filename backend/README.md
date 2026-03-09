@@ -22,7 +22,16 @@ uvicorn main:app --host 0.0.0.0 --port 8000
 | GET | `/api/deploy/{id}` | Get deployment status |
 | DELETE | `/api/deploy/{id}` | Kill and clean up a deployment |
 | WS | `/ws/logs/{id}` | Real-time log streaming (WebSocket) |
+| GET | `/health` | Health check for uptime monitoring |
 | GET | `/docs` | Swagger API documentation (auto-generated) |
+
+### Admin Endpoints (require `ADMIN_TOKEN`)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/admin/blocklist` | List all blocked IPs |
+| POST | `/admin/blocklist` | Block an IP address |
+| DELETE | `/admin/blocklist/{ip}` | Unblock an IP address |
 
 ## Deploy Request Body
 
@@ -122,6 +131,87 @@ When a build or runtime health check fails, the engine:
 3. Applies the suggested Dockerfile and env changes
 4. Retries the build (up to 3 attempts)
 
+## Rate Limiting & IP Blocklist
+
+### Rate Limits
+
+Every endpoint is rate-limited per client IP (supports `X-Forwarded-For` from reverse proxies):
+
+| Endpoint | Limit |
+|----------|-------|
+| `POST /api/deploy` | 5 requests/min |
+| `GET /api/deploy/{id}` | 60 requests/min |
+| `DELETE /api/deploy/{id}` | 10 requests/min |
+| `GET /health` | 30 requests/min |
+| `WS /ws/logs/{id}` | 10 connections/min |
+
+Exceeding the limit returns `429 Too Many Requests` with `Retry-After` and `X-RateLimit-*` headers.
+
+### Automatic IP Banning
+
+IPs that hit **50+ rate limit violations within 60 seconds** are **automatically banned**. No manual intervention needed — the system protects itself.
+
+Auto-banned IPs:
+- Immediately receive `403 Access Denied` on all endpoints
+- Are persisted to `blocked_ips.json` (survives server restarts)
+- Can only be unblocked via the admin API
+
+### Manual IP Management (Admin API)
+
+All admin endpoints require a **Bearer token** set via the `ADMIN_TOKEN` environment variable.
+
+```bash
+# Set the admin token (add to your systemd service or shell)
+export ADMIN_TOKEN="your-secure-secret-token"
+```
+
+> ⚠️ **Change the default token!** If `ADMIN_TOKEN` is not set, it falls back to `changeme-admin-token`. Always set a strong token in production.
+
+#### List blocked IPs
+
+```bash
+curl -H "Authorization: Bearer YOUR_ADMIN_TOKEN" \
+  https://api.yourdomain.com/admin/blocklist
+```
+
+Response:
+```json
+{
+  "blocked_ips": {
+    "1.2.3.4": {
+      "reason": "auto-banned: excessive rate limit violations",
+      "blocked_at": "2025-03-09T14:30:00Z"
+    }
+  }
+}
+```
+
+#### Block an IP manually
+
+```bash
+curl -X POST \
+  -H "Authorization: Bearer YOUR_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"ip": "1.2.3.4", "reason": "spam abuse"}' \
+  https://api.yourdomain.com/admin/blocklist
+```
+
+#### Unblock an IP
+
+```bash
+curl -X DELETE \
+  -H "Authorization: Bearer YOUR_ADMIN_TOKEN" \
+  https://api.yourdomain.com/admin/blocklist/1.2.3.4
+```
+
+### Security Notes
+
+- **Admin endpoints are protected** — without the correct `ADMIN_TOKEN`, requests return `401 Unauthorized`
+- **Public users cannot access** the blocklist endpoints at all
+- **Auto-ban is fully automatic** — no configuration needed, abusive IPs are blocked in real-time
+- **Blocklist persists** in `blocked_ips.json` alongside the backend code
+- **WebSocket connections** from blocked IPs are immediately closed
+
 ## Resource Limits
 
 | Resource | Limit |
@@ -145,7 +235,8 @@ The `CleanupManager` runs in a background thread and removes expired containers 
 
 | File | Purpose |
 |------|---------|
-| `main.py` | FastAPI server, REST + WebSocket endpoints |
+| `main.py` | FastAPI server, REST + WebSocket endpoints, rate limiter, blocklist |
 | `deployer.py` | Docker build/run engine, companion services, AI fix loop |
 | `cleanup.py` | Background TTL expiry and container cleanup |
+| `blocked_ips.json` | Persistent IP blocklist (auto-generated) |
 | `requirements.txt` | Python dependencies |
