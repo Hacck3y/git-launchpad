@@ -241,13 +241,24 @@ CRITICAL RULES for the Dockerfile:
 - For Python apps:
   - Detect if it's Flask (port 5000), FastAPI (port 8000), or Django (port 8000)
   - Use gunicorn or uvicorn as the production server
+- For Elixir/Phoenix apps:
+  - Use elixir:1.14-otp-25 or elixir:1.15-otp-26 base image (NOT just elixir:1.14 — the OTP variant includes full Erlang headers)
+  - ALWAYS install these system deps: apt-get install -y build-essential git erlang-dev libssl-dev
+  - erlang-dev is CRITICAL for NIFs like bcrypt that need erl_interface.h
+  - Set MIX_ENV=prod
+  - Run: mix local.hex --force && mix local.rebar --force
+  - Run: mix deps.get && mix deps.compile && mix compile
+  - For Phoenix apps with assets: run mix assets.deploy or cd assets && npm install && npm run deploy
+  - Default port is 4000; start with: mix phx.server or elixir --sname app -S mix phx.server
+  - NEVER modify .exs config files — they use Elixir syntax, not key=value
+  - If the app uses MongoDB (mongodb_driver or mongodb), the connection is configured in config/*.exs files via Elixir code
 - For Node.js apps:
   - Check package.json scripts for 'start', 'dev', 'serve' — use whichever exists, prefer 'start'
   - For apps needing build steps (React/Vue/Next.js/Vite): always add RUN npm run build
 - Always add: ENV PORT=<detected_port> and make the app bind to 0.0.0.0:$PORT
 - Never hardcode ports in CMD — always reference the PORT env variable
 - Add HEALTHCHECK CMD: curl -f http://localhost:$PORT/ || exit 1 (install curl in the image if needed)
-- Use slim/alpine base images when possible
+- Use slim/alpine base images when possible (except Elixir — use full Debian-based images for NIF support)
 - Set proper WORKDIR
 - Copy dependency files first for better layer caching
 - The CMD should match start_cmd

@@ -81,11 +81,22 @@ Common fixes you should know:
 - Node: missing node-gyp deps, wrong npm scripts
 - Need to set HOST=0.0.0.0 for web servers to bind correctly
 - For monorepos: COPY entire source before install, never just package.json
+
+ELIXIR/PHOENIX-SPECIFIC FIXES:
+- "erl_interface.h: No such file or directory" → Install erlang-dev: apt-get install -y erlang-dev
+- Use full Debian-based Elixir images (e.g. elixir:1.14-otp-25), NOT alpine
+- bcrypt/comeonin NIFs require: build-essential, erlang-dev, libssl-dev
+- NEVER modify .exs config files — they use Elixir syntax (atoms, keywords), not key=value format
+- For old Elixir apps (< 1.12), ensure compatible OTP version
+- Run: mix local.hex --force && mix local.rebar --force before deps.get
+- Default Phoenix port is 4000
+- Start with: mix phx.server or MIX_ENV=prod mix phx.server
 ${monorepoGuidance}
 ${pkgManagerGuidance}
 
 Rules:
 - Use slim base images (node:20-slim for Node, NOT alpine for projects with native modules)
+- For Elixir: use full Debian-based images (elixir:X.Y-otp-Z), NEVER alpine
 - Always EXPOSE the correct port
 - Always set WORKDIR /app
 - If the app needs a .env file, include COPY .env .env
