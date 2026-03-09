@@ -5,15 +5,20 @@ Includes WebSocket endpoint for real-time log streaming and rate limiting.
 import uuid
 import asyncio
 import time
+import json
+import os
 from collections import defaultdict
+from pathlib import Path
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-from typing import Optional, Dict
+from typing import Optional, Dict, Set
 from deployer import Deployer
 from cleanup import CleanupManager
 import docker as _docker_mod
+
+BLOCKLIST_FILE = Path(__file__).parent / "blocked_ips.json"
 
 
 # ─── Rate Limiter ─────────────────────────────────────────────────
