@@ -45,43 +45,83 @@ MAX_FIX_RETRIES = 3
 
 # ─── Companion Service Map ────────────────────────────────────────
 SERVICE_MAP = {
+    "mongodb": {
+        "image": "mongo:6",
+        "port": 27017,
+        "env": {},
+        "inject": {
+            "MONGO_URI": "mongodb://mongodb:27017/app",
+            "MONGODB_URI": "mongodb://mongodb:27017/app",
+            "MONGO_URL": "mongodb://mongodb:27017/app",
+        },
+        "health_timeout": 20,
+    },
     "mysql": {
         "image": "mysql:8",
-        "env": {"MYSQL_ROOT_PASSWORD": "auto", "MYSQL_DATABASE": "app"},
         "port": 3306,
-        "inject": {"DB_HOST": "{hostname}", "DB_PORT": "3306", "DB_USER": "root", "DB_PASSWORD": "{password}", "DB_NAME": "app"},
-        "health_cmd": ["mysqladmin", "ping", "-h", "localhost"],
-        "health_timeout": 30,
+        "env": {
+            "MYSQL_ROOT_PASSWORD": "rootpass",
+            "MYSQL_DATABASE": "app",
+            "MYSQL_USER": "appuser",
+            "MYSQL_PASSWORD": "apppass",
+        },
+        "inject": {
+            "DB_HOST": "mysql",
+            "DB_PORT": "3306",
+            "DB_USER": "appuser",
+            "DB_PASSWORD": "apppass",
+            "DB_NAME": "app",
+            "MYSQL_URI": "mysql://appuser:apppass@mysql:3306/app",
+        },
+        "health_cmd": ["mysqladmin", "ping", "-h", "localhost", "-u", "root", "-prootpass"],
+        "health_timeout": 40,
+    },
+    "postgres": {
+        "image": "postgres:15",
+        "port": 5432,
+        "env": {
+            "POSTGRES_PASSWORD": "apppass",
+            "POSTGRES_DB": "app",
+            "POSTGRES_USER": "appuser",
+        },
+        "inject": {
+            "DATABASE_URL": "postgresql://appuser:apppass@postgres:5432/app",
+            "DB_HOST": "postgres",
+            "DB_USER": "appuser",
+            "DB_PASSWORD": "apppass",
+            "DB_NAME": "app",
+        },
+        "health_cmd": ["pg_isready", "-U", "appuser"],
+        "health_timeout": 20,
     },
     "redis": {
         "image": "redis:alpine",
         "port": 6379,
-        "inject": {"REDIS_URL": "redis://{hostname}:6379"},
+        "env": {},
+        "inject": {
+            "REDIS_URL": "redis://redis:6379",
+            "REDIS_HOST": "redis",
+            "REDIS_PORT": "6379",
+        },
         "health_cmd": ["redis-cli", "ping"],
         "health_timeout": 10,
     },
-    "postgres": {
-        "image": "postgres:15",
-        "env": {"POSTGRES_PASSWORD": "auto", "POSTGRES_DB": "app"},
-        "port": 5432,
-        "inject": {"DATABASE_URL": "postgresql://postgres:{password}@{hostname}:5432/app"},
-        "health_cmd": ["pg_isready", "-U", "postgres"],
-        "health_timeout": 15,
-    },
-    "mongodb": {
-        "image": "mongo:6",
-        "port": 27017,
-        "inject": {"MONGODB_URI": "mongodb://{hostname}:27017/app"},
-        "health_timeout": 15,
-    },
 }
 
-# Env var patterns that indicate a service dependency
+# Env var patterns that indicate a service dependency (used when analyzing env keys from frontend)
 SERVICE_DETECT_PATTERNS = {
-    "mysql": ["MYSQL", "DB_HOST", "DB_PORT", "DB_USER", "DB_PASSWORD", "DB_NAME", "MYSQL_URL"],
+    "mysql": ["MYSQL", "DB_HOST", "DB_PORT", "DB_USER", "DB_PASSWORD", "DB_NAME", "MYSQL_URL", "MYSQL_URI"],
     "postgres": ["POSTGRES", "DATABASE_URL", "PG_", "PGHOST", "PGDATABASE", "PGUSER", "PGPASSWORD"],
-    "redis": ["REDIS_URL", "REDIS_HOST", "REDIS_PORT"],
+    "redis": ["REDIS_URL", "REDIS_HOST", "REDIS_PORT", "IOREDIS"],
     "mongodb": ["MONGODB_URI", "MONGO_URL", "MONGO_URI", "MONGODB_URL"],
+}
+
+# Keywords to scan in package.json / .env files for local detection
+SERVICE_FILE_INDICATORS = {
+    "mongodb": ["mongoose", "mongodb", "mongo", "mongoclient"],
+    "mysql": ["mysql", "mysql2", "sequelize", "knex", "typeorm"],
+    "postgres": ["pg", "postgres", "sequelize", "knex", "typeorm", "prisma"],
+    "redis": ["redis", "ioredis", "bull", "bullmq"],
 }
 
 
@@ -96,6 +136,46 @@ def _detect_services_from_env(env_keys: List[str]) -> List[str]:
                     detected.add(service)
                     break
     return list(detected)
+
+
+def _detect_services_from_files(repo_dir: str) -> List[str]:
+    """Detect which services a repo needs by scanning package.json and .env files."""
+    content = ""
+
+    # Read package.json
+    pkg_path = os.path.join(repo_dir, "package.json")
+    if os.path.exists(pkg_path):
+        try:
+            with open(pkg_path, "r") as f:
+                content += f.read().lower()
+        except Exception:
+            pass
+
+    # Read .env example files
+    for env_file in [".env.example", ".env.sample", ".env", ".env.local"]:
+        p = os.path.join(repo_dir, env_file)
+        if os.path.exists(p):
+            try:
+                with open(p, "r") as f:
+                    content += "\n" + f.read().lower()
+            except Exception:
+                pass
+
+    # Read requirements.txt for Python projects
+    req_path = os.path.join(repo_dir, "requirements.txt")
+    if os.path.exists(req_path):
+        try:
+            with open(req_path, "r") as f:
+                content += "\n" + f.read().lower()
+        except Exception:
+            pass
+
+    needed = []
+    for service, keywords in SERVICE_FILE_INDICATORS.items():
+        if any(k in content for k in keywords):
+            needed.append(service)
+
+    return needed
 
 
 def _allocate_port() -> int:
@@ -300,7 +380,7 @@ class Deployer:
     def _start_companion_services(self, deploy_id: str, network_name: str,
                                    needed_services: List[str]) -> Dict[str, Dict[str, Any]]:
         """Start companion service containers on the deployment network.
-        Returns a dict of {service_name: {hostname, port, password, container_name, inject_env}}."""
+        Returns a dict of {service_name: {hostname, port, container_name, inject_env}}."""
         service_info = {}
 
         for svc_name in needed_services:
@@ -308,15 +388,11 @@ class Deployer:
             if not svc_config:
                 continue
 
-            container_name = f"svc-{deploy_id}-{svc_name}"
+            container_name = f"gitpreview_{deploy_id}_{svc_name}"
             hostname = svc_name  # Docker network alias
 
-            # Generate random password for services that need one
-            password = secrets.token_urlsafe(16)
-            env = {}
-            if svc_config.get("env"):
-                for key, val in svc_config["env"].items():
-                    env[key] = password if val == "auto" else val
+            # Use static env from SERVICE_MAP (deterministic credentials)
+            env = dict(svc_config.get("env", {}))
 
             try:
                 self._emit_log(deploy_id, f"▶ Starting {svc_name} ({svc_config['image']})...")
@@ -340,21 +416,20 @@ class Deployer:
                 except Exception:
                     pass  # Already connected with alias during run
 
-                # Build inject env vars with actual values
-                inject_env = {}
-                for env_key, env_tpl in svc_config.get("inject", {}).items():
-                    inject_env[env_key] = env_tpl.replace("{hostname}", hostname).replace("{password}", password)
+                # Inject env vars are static — copy directly from SERVICE_MAP
+                inject_env = dict(svc_config.get("inject", {}))
 
                 service_info[svc_name] = {
                     "hostname": hostname,
                     "port": svc_config["port"],
-                    "password": password if env else None,
                     "container_name": container_name,
                     "container_id": container.id,
                     "inject_env": inject_env,
                     "image": svc_config["image"],
+                    "credentials": env,  # pass back the env used (passwords etc.)
                 }
 
+                self._emit_log(deploy_id, f"  ✓ {svc_name} container started")
                 print(f"[DOCKER] Started companion: {container_name} ({svc_config['image']})")
 
             except Exception as e:
@@ -430,7 +505,7 @@ class Deployer:
     def _cleanup_companion_services(self, deploy_id: str):
         """Stop and remove all companion service containers for a deployment."""
         for svc_name in SERVICE_MAP:
-            container_name = f"svc-{deploy_id}-{svc_name}"
+            container_name = f"gitpreview_{deploy_id}_{svc_name}"
             self._cleanup_container(container_name)
 
         network_name = f"gitpreview_{deploy_id}_net"
@@ -869,13 +944,23 @@ class Deployer:
                 app_port = deploy_config.get("port", 3000)
 
             # --- Detect and start companion services ---
-            env_keys = list(env_vars.keys())
-            # Also check deploy_config detected_services if provided
+            # Priority: 1) AI-detected from frontend, 2) local file scan, 3) env key patterns
             detected_services = []
             if deploy_config and deploy_config.get("detected_services"):
                 detected_services = deploy_config["detected_services"]
-            else:
-                detected_services = _detect_services_from_env(env_keys)
+            
+            # Also scan cloned repo files for service indicators
+            file_detected = _detect_services_from_files(tmp_dir)
+            env_detected = _detect_services_from_env(list(env_vars.keys()))
+            
+            # Merge all detected services (deduplicate)
+            all_detected = set(detected_services) | set(file_detected) | set(env_detected)
+            detected_services = [s for s in all_detected if s in SERVICE_MAP]
+            
+            if file_detected:
+                self._emit_log(deploy_id, f"▶ File scan detected: {', '.join(file_detected)}")
+            if env_detected:
+                self._emit_log(deploy_id, f"▶ Env var scan detected: {', '.join(env_detected)}")
 
             companion_info = {}
             if detected_services:
@@ -899,7 +984,7 @@ class Deployer:
                 # Re-write .env file with injected vars
                 self._write_env_file(tmp_dir, env_vars)
 
-                # Store companion info in deployment state (sanitized for frontend)
+                # Store companion info in deployment state (for frontend)
                 with self._lock:
                     if deploy_id in self.deployments:
                         self.deployments[deploy_id]["companion_services"] = {
@@ -908,7 +993,7 @@ class Deployer:
                                 "image": data["image"],
                                 "hostname": data["hostname"],
                                 "port": data["port"],
-                                "password": data.get("password"),
+                                "credentials": data.get("credentials", {}),
                                 "inject_env": data.get("inject_env", {}),
                                 "container_name": data["container_name"],
                             }
